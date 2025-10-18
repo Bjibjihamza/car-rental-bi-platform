@@ -175,6 +175,108 @@ docker exec -it oracle-xe bash -lc "sqlplus raw_layer/Raw#123@localhost:1521/XEP
 
 ---
 
+## 📥 Seed Initial RAW Data
+
+These steps load a small initial dataset (données initiales) into the RAW layer. Future/streaming data will be synthetically generated in near real time (données synthétiques en temps réel).
+
+### 1) Copy the updated seed file into the container
+```powershell
+# from your project root
+docker cp raw_seed.sql oracle-xe:/tmp/raw_seed.sql
+```
+
+### 2) (Optional) Cleanup before reseeding
+
+If you’re reseeding, wipe dependent tables in a safe order:
+
+Connect as RAW user first (see commands below), then run:
+
+```sql
+DELETE FROM IoT_Data;
+DELETE FROM IoT_Alerts;
+DELETE FROM car_telemetry;
+DELETE FROM Trips;
+
+DELETE FROM Payments;
+DELETE FROM Maintenance;
+DELETE FROM Damages;
+
+DELETE FROM Rentals;
+DELETE FROM Reservations;
+
+DELETE FROM Cars;
+DELETE FROM Managers;
+DELETE FROM IoT_Devices;
+DELETE FROM Car_Categories;
+DELETE FROM Branches;
+
+COMMIT;
+```
+
+💡 **Tip (idempotence):** To avoid duplicate branches when reseeding, you can add once:
+
+```sql
+ALTER TABLE Branches ADD CONSTRAINT uq_branches_name UNIQUE (branch_name);
+```
+
+### 3) Run the seed
+```powershell
+docker exec -it oracle-xe bash -lc "sqlplus raw_layer/Raw#123@localhost:1521/XEPDB1 @/tmp/raw_seed.sql"
+```
+
+### 4) Verify quickly
+```powershell
+docker exec -it oracle-xe sqlplus raw_layer/Raw#123@localhost:1521/XEPDB1
+```
+
+In SQL*Plus:
+
+```sql
+-- Counts expected after seed
+SELECT (SELECT COUNT(*) FROM Branches)        AS branches,
+       (SELECT COUNT(*) FROM Managers)        AS managers,
+       (SELECT COUNT(*) FROM Car_Categories)  AS categories,
+       (SELECT COUNT(*) FROM IoT_Devices)     AS iot_devices,
+       (SELECT COUNT(*) FROM Cars)            AS cars
+FROM dual;
+
+-- Available cars + IoT view should return rows
+SELECT * FROM Available_Cars_With_IoT FETCH FIRST 10 ROWS ONLY;
+```
+
+📊 **What this seed inserts (RAW)**
+
+- **Branches** — 5 branches (Casablanca HQ, Rabat Agdal, Tangier Downtown, Marrakech Gueliz, Fes Medina).
+- **Managers** — 15 managers distributed across branches (FK branch_id, email unique).
+- **Car_Categories** — 6 categories (Economy, Compact, SUV, Luxury, Van, Electric).
+- **IoT_Devices** — 50 telemetry devices (IOT-MA-0001 … IOT-MA-0050, serial unique).
+- **Cars** — 50 vehicles mapped to categories, branches, and IoT devices (status, rates, service dates).
+
+ℹ️ **Ces données sont de démarrage (initial seed) pour la couche RAW.**  
+L’autre data (réservations, locations, télémétrie IoT, paiements, alertes, etc.) sera générée de façon synthétique en temps réel par nos scripts/ingestions lors des tests et démonstrations.
+
+🔐 **Connect refs (for convenience)**
+
+```powershell
+# SYSTEM (admin)
+docker exec -it oracle-xe sqlplus system/Admin#123@localhost:1521/XEPDB1
+
+# RAW/SILVER/GOLD schemas
+docker exec -it oracle-xe bash -lc "sqlplus raw_layer/Raw#123@localhost:1521/XEPDB1"
+docker exec -it oracle-xe bash -lc "sqlplus silver_layer/Silver#123@localhost:1521/XEPDB1"
+docker exec -it oracle-xe bash -lc "sqlplus gold_layer/Gold#123@localhost:1521/XEPDB1"
+```
+
+🧪 **Next up: synthetic real-time data**
+
+Generators will stream IoT telemetry, reservations, rentals, payments, and alerts into RAW.
+
+Scheduled/streaming jobs will transform RAW → SILVER → GOLD for analytics and dashboards.
+
+If you want, add a tiny PowerShell script (`/src/database/scripts/seed.ps1`) that runs the copy + optional cleanup + seed in one go.
+
+---
+
 ## 🧪 Version Control & Collaboration
 
 To version and push your Oracle setup files to GitHub:
@@ -185,8 +287,8 @@ git commit -m "🔧 Oracle Medallion setup + RAW/SILVER/GOLD schemas added"
 git push origin main
 ```
 
-> 💡 Tip: To avoid line-ending warnings (`LF will be replaced by CRLF`):
-> ```bash
+> 💡 **Tip:** To avoid line-ending warnings (`LF will be replaced by CRLF`):
+> ```bash:disable-run
 > git config core.autocrlf false
 > ```
 
@@ -210,4 +312,4 @@ After database setup:
 ---
 
 © 2025 – Car Rental BI Platform | Data Engineering & BI by Hamza
-
+```
