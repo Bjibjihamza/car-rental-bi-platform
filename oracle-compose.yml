@@ -1,0 +1,17 @@
+services:
+  oracle-xe:
+    image: gvenzl/oracle-xe:21
+    container_name: oracle-xe
+    ports:
+      - "1521:1521"   # listener
+      - "5500:5500"   # EM Express
+    environment:
+      ORACLE_PASSWORD: "Admin#123"        # SYSTEM password
+      APP_USER: "carrental"               # app schema auto-created
+      APP_USER_PASSWORD: "CarBI#123"
+    volumes:
+      - oracle-xe-data:/opt/oracle/oradata
+    restart: unless-stopped
+
+volumes:
+  oracle-xe-data:
