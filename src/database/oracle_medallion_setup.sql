@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Oracle Medallion Setup Script (RAW / SILVER / GOLD)
 -- Project: Car-Rental BI Platform
--- Author: (your name / team)
+-- Author: Your Team
 -- Date: 2025-10-18
 -- Target: Oracle Database 21c XE (Pluggable DB: XEPDB1)
 --
@@ -16,7 +16,7 @@
 --   1) Connect as SYSTEM to XEPDB1 (adjust password/host as needed):
 --        sqlplus system/Admin#123@localhost:1521/XEPDB1
 --
---   2) Run this script in SQL*Plus:
+--   2) Run this script in SQL*Plus (as SYSTEM):
 --        @oracle_medallion_setup.sql
 --
 --   3) (Optional) Test connections from your host:
@@ -37,8 +37,9 @@
 SET SERVEROUTPUT ON
 WHENEVER SQLERROR EXIT SQL.SQLCODE
 
-
--- Ensure we are in the pluggable database XEPDB1
+PROMPT =============================
+PROMPT 0) Session / sanity checks
+PROMPT =============================
 SHOW CON_NAME;
 -- If not XEPDB1, uncomment the following line:
 -- ALTER SESSION SET CONTAINER = XEPDB1;
@@ -46,10 +47,9 @@ SHOW CON_NAME;
 -- ============================================================================
 -- 1) TABLESPACES (Optional but recommended for isolation)
 -- ============================================================================
-
--- Adjust initial SIZE and AUTOEXTEND policy per needs.
--- Datafiles will be created in the default directory for the PDB.
--- If you need absolute paths, specify full path instead of just 'raw_ts.dbf', etc.
+PROMPT =============================
+PROMPT 1) Creating tablespaces (RAW/SILVER/GOLD)
+PROMPT =============================
 
 CREATE TABLESPACE raw_ts
   DATAFILE 'raw_ts.dbf'
@@ -72,6 +72,9 @@ CREATE TABLESPACE gold_ts
 -- ============================================================================
 -- 2) USERS / SCHEMAS
 -- ============================================================================
+PROMPT =============================
+PROMPT 2) Creating users (schemas) for RAW/SILVER/GOLD
+PROMPT =============================
 
 -- RAW layer user (logical "database": raw)
 CREATE USER raw_layer IDENTIFIED BY "Raw#123"
@@ -91,8 +94,20 @@ CREATE USER gold_layer IDENTIFIED BY "Gold#123"
 -- ============================================================================
 -- 3) PRIVILEGES
 -- ============================================================================
+PROMPT =============================
+PROMPT 3) Granting privileges
+PROMPT =============================
 
--- Minimal creation privileges for each user
-GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE SEQUENCE, CREATE PROCEDURE TO raw_layer;
-GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE SEQUENCE, CREATE PROCEDURE TO silver_layer;
-GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE SEQUENCE, CREATE PROCEDURE TO gold_layer;
+-- Minimal creation privileges for each user + CREATE TRIGGER (needed by RAW/GOLD scripts)
+GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE SEQUENCE, CREATE PROCEDURE, CREATE TRIGGER TO raw_layer;
+GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE SEQUENCE, CREATE PROCEDURE, CREATE TRIGGER TO silver_layer;
+GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE SEQUENCE, CREATE PROCEDURE, CREATE TRIGGER TO gold_layer;
+
+-- Cross-layer read (demo-friendly; refine to object-level in production)
+GRANT SELECT ANY TABLE TO silver_layer;
+GRANT SELECT ANY TABLE TO gold_layer;
+
+PROMPT =============================
+PROMPT DONE. Users & tablespaces created for RAW/SILVER/GOLD.
+PROMPT Change passwords before production and tighten privileges as needed.
+PROMPT =============================
