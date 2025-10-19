@@ -64,7 +64,7 @@ We’ll create three separate users corresponding to each layer of the pipeline:
 Run the following SQL script after connecting via `sqlplus`:
 
 ```bash
-@src/database/oracle_medallion_setup.sql
+@src/database/scripts/oracle_medallion_setup.sql
 ```
 
 This script:
@@ -83,13 +83,13 @@ car-rental-bi-platform/
 ├── README_Oracle_Docker.md              # Detailed Oracle setup guide
 ├── src/
 │   ├── database/
-│   │   ├── oracle_medallion_setup.sql   # Create schemas & users
 │   │   ├── schema/
 │   │   │   ├── raw.sql                  # RAW layer table definitions
 │   │   │   ├── silver.sql               # SILVER layer transformations
 │   │   │   └── gold.sql                 # GOLD layer analytics/BI views
 │   │   └── scripts/
-│   │       └── raw_scripts.sql          # Data generation scripts
+│   │       └── raw_scripts.sql          # Data generation script
+│   │       │── oracle_medallion_setup.sql   # Create schemas & users
 │   └── generator/                       # Data generation (future ETL)
 └── Documentation/                       # Docs, diagrams, etc.
 ```

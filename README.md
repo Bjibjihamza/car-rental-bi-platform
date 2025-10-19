@@ -64,7 +64,7 @@ We’ll create three separate users corresponding to each layer of the pipeline:
 Run the following SQL script after connecting via `sqlplus`:
 
 ```bash
-@src/database/oracle_medallion_setup.sql
+@src/database/scripts/oracle_medallion_setup.sql
 ```
 
 This script:
