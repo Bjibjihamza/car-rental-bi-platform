@@ -1,128 +1,82 @@
 # 🚗 Car Rental BI Platform — Oracle Setup Guide
 
-This project is the backend **data foundation** of the *Car Rental Business Intelligence Platform*, built to manage and analyze car rental operations using a **Medallion Data Architecture** (`Raw → Silver → Gold`) on **Oracle Database (XE 21c)**.
+This document explains how to set up the **Oracle backend** for the *Car Rental BI Platform*, which follows a **Medallion Data Architecture** (`Raw → Silver → Gold`) pattern on **Oracle XE 21c**.
 
 ---
 
 ## 📦 1. Run Oracle Database in Docker
 
-The first step is to create an Oracle Database container using Docker Compose.
+Start by creating an Oracle XE 21c container with Docker Compose.
 
 ### 🧩 Compose File
-Make sure the file [`oracle-compose.yml`](./oracle-compose.yml) exists in the project root.
 
-Once ready, open your terminal in the project folder and execute:
+Ensure the file `oracle-compose.yml` exists in your project root.
+
+Run the following command:
 
 ```bash
 docker compose -f oracle-compose.yml up -d
 ```
 
 This will:
-- Download and start the **Oracle XE 21c** container (`gvenzl/oracle-xe:21`)
-- Expose ports `1521` (SQL*Net listener) and `5500` (Enterprise Manager Express)
-- Create a system password and an application user automatically
+
+* Download and start the **Oracle XE 21c** container (`gvenzl/oracle-xe:21`)
+* Expose ports `1521` (SQL*Net listener) and `5500` (Enterprise Manager Express)
+* Automatically set up the system password and default users
 
 ---
 
-## 🔍 2. Check if the Database is Ready
+## 🔍 2. Verify Database Readiness
 
-You can verify that Oracle has finished initializing with:
+Check logs to confirm Oracle is initialized:
+
+**Linux/macOS:**
 
 ```bash
-docker logs -f oracle-xe | Select-String "DATABASE IS READY TO USE!"
+docker logs -f oracle-xe | grep -m1 "DATABASE IS READY TO USE!"
 ```
 
-Once you see this message, your container is running and ready for connections.
+**Windows PowerShell:**
+
+```powershell
+docker logs -f oracle-xe | Select-String "DATABASE IS READY TO USE!" -SimpleMatch
+```
+
+Once you see that message, the container is ready for connections.
 
 ---
 
 ## 🧠 3. Connect to Oracle Database
 
-Use `sqlplus` to access the Oracle Database inside the running container:
+You can connect inside the running container using SQL*Plus:
 
 ```bash
 docker exec -it oracle-xe sqlplus system/Admin#123@localhost:1521/XEPDB1
 ```
 
-> 🧩 **Note:**  
-> - `system/Admin#123` = username/password  
-> - `XEPDB1` = default pluggable database (PDB) name  
+> 🔹 **Details:**
+>
+> * `system/Admin#123` → username/password
+> * `XEPDB1` → default Pluggable Database (PDB)
 
 ---
 
-## 🧱 4. Medallion Architecture Setup (Raw → Silver → Gold)
+## 🛠️ 4. Create Medallion Schemas (Raw → Silver → Gold)
 
-Oracle supports multiple schemas for organizing your data warehouse stages.  
-We’ll create three separate users corresponding to each layer of the pipeline:
-
-- `RAW_USER` → stores raw ingested data  
-- `SILVER_USER` → cleansed and transformed data  
-- `GOLD_USER` → final analytics and BI tables  
-
-### ⚙️ Setup Script
-
-Run the following SQL script after connecting via `sqlplus`:
+Run the setup script to create dedicated schemas for each data layer:
 
 ```bash
 @src/database/scripts/oracle_medallion_setup.sql
 ```
 
 This script:
-- Creates the **RAW**, **SILVER**, and **GOLD** users/schemas
-- Grants required privileges (including `CREATE TRIGGER`)
-- Prepares the database for ETL workflows
 
----
+* Creates users `RAW_LAYER`, `SILVER_LAYER`, and `GOLD_LAYER`
+* Grants standard privileges
+* Prepares each schema for ETL workflows and BI queries
 
-## 📂 Project Structure
+If needed, grant trigger creation explicitly:
 
-```
-car-rental-bi-platform/
-│
-├── oracle-compose.yml                   # Docker setup for Oracle XE
-├── README_Oracle_Docker.md              # Detailed Oracle setup guide
-├── src/
-│   ├── database/
-│   │   ├── oracle_medallion_setup.sql   # Create schemas & users
-│   │   ├── schema/
-│   │   │   ├── raw.sql                  # RAW layer table definitions
-│   │   │   ├── silver.sql               # SILVER layer transformations
-│   │   │   └── gold.sql                 # GOLD layer analytics/BI views
-│   │   └── scripts/
-│   │       └── raw_scripts.sql          # Data generation scripts
-│   └── generator/                       # Data generation (future ETL)
-└── Documentation/                       # Docs, diagrams, etc.
-```
-
----
-
-# 📜 Load Schemas: `raw.sql`, `silver.sql`, `gold.sql`
-
-> **PowerShell note:** the `@` symbol is special in PowerShell. Run SQL files via a shell inside the container to avoid parsing issues.
-
-## 1️⃣ Copy the files into the container
-```powershell
-# from your project root
-docker cp .\src\database\schema\raw.sql    oracle-xe:/tmp/raw.sql
-docker cp .\src\database\schema\silver.sql oracle-xe:/tmp/silver.sql
-docker cp .\src\database\schema\gold.sql   oracle-xe:/tmp/gold.sql
-```
-
-If you hit permissions issues:
-```powershell
-docker cp .\src\database\schema\raw.sql oracle-xe:/tmp/raw.sql.new
-docker exec -u 0 -it oracle-xe bash -lc "mv -f /tmp/raw.sql.new /tmp/raw.sql && chown oracle:dba /tmp/raw.sql"
-```
-
----
-
-## 2️⃣ Ensure required privileges (once)
-As SYSTEM:
-```powershell
-docker exec -it oracle-xe sqlplus system/Admin#123@localhost:1521/XEPDB1
-```
-
-In SQL*Plus:
 ```sql
 GRANT CREATE TRIGGER TO raw_layer;
 GRANT CREATE TRIGGER TO silver_layer;
@@ -131,83 +85,128 @@ GRANT CREATE TRIGGER TO gold_layer;
 
 ---
 
-## 3️⃣ Run the scripts (recommended way)
-```powershell
-docker exec -it oracle-xe bash -lc "sqlplus raw_layer/Raw#123@localhost:1521/XEPDB1 @/tmp/raw.sql"
-docker exec -it oracle-xe bash -lc "sqlplus silver_layer/Silver#123@localhost:1521/XEPDB1 @/tmp/silver.sql"
-docker exec -it oracle-xe bash -lc "sqlplus gold_layer/Gold#123@localhost:1521/XEPDB1 @/tmp/gold.sql"
-```
+## 📂 5. Load Schemas per Layer
 
----
+After users are created, load their structure from the schema files.
 
-## 4️⃣ Verify objects
-```powershell
-docker exec -it oracle-xe sqlplus raw_layer/Raw#123@localhost:1521/XEPDB1
-```
-
-In SQL*Plus:
-```sql
-SHOW USER;
-SELECT object_type, COUNT(*) FROM user_objects GROUP BY object_type ORDER BY 1;
-SELECT table_name FROM user_tables ORDER BY table_name;
-```
-
----
-
-## 5️⃣ Clean & reload (optional)
-Clean RAW layer:
-```powershell
-docker exec -it oracle-xe sqlplus raw_layer/Raw#123@localhost:1521/XEPDB1
-```
-
-In SQL*Plus (paste each block then `/`):
-```sql
-BEGIN FOR r IN (SELECT view_name FROM user_views) LOOP EXECUTE IMMEDIATE 'DROP VIEW '||r.view_name; END LOOP; END; /
-BEGIN FOR r IN (SELECT mview_name FROM user_mviews) LOOP EXECUTE IMMEDIATE 'DROP MATERIALIZED VIEW '||r.mview_name; END LOOP; END; /
-BEGIN FOR r IN (SELECT table_name FROM user_tables) LOOP EXECUTE IMMEDIATE 'DROP TABLE '||r.table_name||' CASCADE CONSTRAINTS PURGE'; END LOOP; END; /
-BEGIN FOR r IN (SELECT sequence_name FROM user_sequences) LOOP EXECUTE IMMEDIATE 'DROP SEQUENCE '||r.sequence_name; END LOOP; END; /
-BEGIN FOR r IN (SELECT object_name, object_type FROM user_objects WHERE object_type IN ('PROCEDURE','FUNCTION','PACKAGE','PACKAGE BODY','TRIGGER','SYNONYM')) LOOP EXECUTE IMMEDIATE 'DROP '||r.object_type||' '||r.object_name; END LOOP; END; /
-```
-Then re-run:
-```powershell
-docker exec -it oracle-xe bash -lc "sqlplus raw_layer/Raw#123@localhost:1521/XEPDB1 @/tmp/raw.sql"
-```
-
----
-
-## 🧪 Version Control & Collaboration
-
-To version and push your Oracle setup files to GitHub:
+### • Raw Layer
 
 ```bash
-git add .
-git commit -m "🔧 Oracle Medallion setup + RAW/SILVER/GOLD schemas added"
-git push origin main
+docker exec -it oracle-xe sqlplus raw_layer/Raw#123@localhost:1521/XEPDB1
 ```
 
-> 💡 Tip: To avoid line-ending warnings (`LF will be replaced by CRLF`):
-> ```bash
-> git config core.autocrlf false
-> ```
+```sql
+@src/database/schema/raw.sql
+```
+
+### • Silver Layer
+
+```bash
+docker exec -it oracle-xe sqlplus silver_layer/Silver#123@localhost:1521/XEPDB1
+```
+
+```sql
+@src/database/schema/silver.sql
+```
+
+### • Gold Layer
+
+```bash
+docker exec -it oracle-xe sqlplus gold_layer/Gold#123@localhost:1521/XEPDB1
+```
+
+```sql
+@src/database/schema/gold.sql
+```
 
 ---
 
-## 🧪 Next Steps
-After database setup:
-1. Add your ETL scripts for **Raw → Silver → Gold** processing.
-2. Integrate with analytics or BI visualization layers.
-3. Automate refresh and monitoring with Python or Airflow.
+## 💪 6. Seed Static Data (Branches, Managers, Cars, IoT Devices)
+
+Once the **RAW** schema is ready, seed your static operational data.
+
+Run from your Python environment:
+
+```bash
+python src/generator/seed_static.py
+```
+
+This script populates:
+
+* Branches (`BRANCHES`)
+* Managers (`MANAGERS`)
+* IoT Devices (`IOT_DEVICES`)
+* Cars (`CARS`)
+
+These remain static across sessions.
 
 ---
 
-## 🧮 Requirements
+## 🚀 7. Run Real-Time Simulation
 
-- **Docker & Docker Compose**
-- **Oracle XE 21c image** (`gvenzl/oracle-xe:21`)
-- **SQL*Plus** client (included in container)
-- **Windows PowerShell** (for `Select-String` usage)
+After seeding static data, run the real-time simulation demo:
+
+```bash
+python src/generator/demo_realtime.py
+```
+
+This will:
+
+* Simulate rentals in 5 branches across Morocco
+* Create, activate, and close rentals dynamically
+* Update car statuses in real time
+
+Logs include timestamps for every simulated rental event.
 
 ---
 
-© 2025 – Car Rental BI Platform | Data Engineering & BI by Hamza
+## 🔧 8. Troubleshooting
 
+### ORA-12514 / Connection Refused
+
+> Check that your container is running and port 1521 is not blocked.
+
+```bash
+docker ps
+docker logs oracle-xe | grep READY
+```
+
+### ORA-00923 (Missing FROM Clause)
+
+> Caused by missing `FROM` in SQL statements (fixed in latest `demo_realtime.py`).
+
+Ensure your local file has:
+
+```sql
+SELECT CAR_ID, ODOMETER_KM FROM CARS WHERE ...
+```
+
+### Permission Errors
+
+> Run as the correct schema user (`raw_layer`, `silver_layer`, or `gold_layer`) and confirm grants:
+
+```sql
+GRANT CREATE TABLE, CREATE TRIGGER, CREATE SEQUENCE TO raw_layer;
+```
+
+---
+
+## 📅 Full Workflow Summary
+
+| Step | Action           | Command                                            |             |
+| ---- | ---------------- | -------------------------------------------------- | ----------- |
+| 1    | Start Oracle     | `docker compose -f oracle-compose.yml up -d`       |             |
+| 2    | Check ready      | `docker logs -f oracle-xe                          | grep READY` |
+| 3    | Create schemas   | `@src/database/scripts/oracle_medallion_setup.sql` |             |
+| 4    | Load DDLs        | `@src/database/schema/*.sql`                       |             |
+| 5    | Seed data        | `python src/generator/seed_static.py`              |             |
+| 6    | Simulate rentals | `python src/generator/demo_realtime.py`            |             |
+
+---
+
+## 🌐 Result
+
+You now have a fully initialized **Oracle Medallion Warehouse** with real-time data flow simulation.
+
+* **RAW_LAYER**: transactional & IoT data (source-of-truth)
+* **SILVER_LAYER**: cl
