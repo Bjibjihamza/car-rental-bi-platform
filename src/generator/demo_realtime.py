@@ -1,6 +1,6 @@
 # demo_realtime.py
 # -------------------------------------------------------------------
-# Real-time demo WITHOUT RESERVATIONS/RT_EVENTS:
+# Real-time demo WITHOUT RESERVATIONS/RT_EVENTS
 # - 5 users / 5 branches
 # - immediate visibility in RENTALS (STATUS='IN_PROGRESS')
 # - auto switch to ACTIVE at start, CLOSED at return; CARS status synced
@@ -228,15 +228,11 @@ def compute_amount(category_name: str, start_at: datetime, return_at: datetime) 
 # Scenario: 5 users / 5 branches
 # =========================
 SCENARIO = [
-    # 1) Casablanca / Economy — return next day 10:00
-    {"branch": "Casablanca HQ",    "category": "Economy",  "offset_min": 5,  "return": "next_day_10"},
-    # 2) Rabat / SUV — return +8h
+    # Start the very first rental 10 seconds after script start
+    {"branch": "Casablanca HQ",    "category": "Economy",  "offset_sec": 10, "return": "next_day_10"},
     {"branch": "Rabat Agdal",      "category": "SUV",      "offset_min": 10, "return": "same_day_plus_hours", "hours": 8},
-    # 3) Marrakech / Luxury — return +26h
     {"branch": "Marrakech Gueliz", "category": "Luxury",   "offset_min": 15, "return": "plus_hours", "hours": 26},
-    # 4) Tanger / Van — return +3h
     {"branch": "Tanger Downtown",  "category": "Van",      "offset_min": 20, "return": "same_day_plus_hours", "hours": 3},
-    # 5) Agadir / Electric — return next day 18:00
     {"branch": "Agadir Plage",     "category": "Electric", "offset_min": 25, "return": "next_day_18"},
 ]
 
@@ -260,6 +256,16 @@ def resolve_return_time(start_at: datetime, rule: dict) -> datetime:
         return start_at + timedelta(hours=rule.get("hours", 24))
     return start_at + timedelta(hours=6)
 
+def compute_planned_start(script_t0: datetime, plan: dict) -> datetime:
+    """
+    Support both offset_sec and offset_min. Defaults to immediate if neither provided.
+    """
+    if "offset_sec" in plan and plan["offset_sec"] is not None:
+        return script_t0 + timedelta(seconds=int(plan["offset_sec"]))
+    if "offset_min" in plan and plan["offset_min"] is not None:
+        return script_t0 + timedelta(minutes=int(plan["offset_min"]))
+    return script_t0
+
 # =========================
 # Main
 # =========================
@@ -277,7 +283,8 @@ def main():
         cmap = map_table(conn, "SELECT CATEGORY_NAME, CATEGORY_ID FROM CAR_CATEGORIES", "CATEGORY_NAME", "CATEGORY_ID")
         if not bmap or not cmap:
             raise RuntimeError("Static data missing: run 01_seed_static.py first.")
-        cmap = {k.upper(): v for k, v in cmap.items()}
+        # Make category lookup case-insensitive
+        cmap = {str(k).upper(): v for k, v in cmap.items()}
 
     # Plan & insert scheduled rentals immediately
     plans_materialized = []
@@ -285,9 +292,8 @@ def main():
         user          = USERS[idx]
         branch_name   = plan["branch"]
         category_name = plan["category"]
-        offset_min    = plan["offset_min"]
 
-        planned_start  = script_t0 + timedelta(minutes=offset_min)
+        planned_start  = compute_planned_start(script_t0, plan)
         planned_return = resolve_return_time(planned_start, plan)
 
         with engine.begin() as conn:
@@ -326,7 +332,7 @@ def main():
 
             log(f"📝 SCHEDULED RENTAL #{rental_id} | {branch_name} | car_id={car_id} | "
                 f"client={user['first']} {user['last']} | cat={category_name} | "
-                f"start@{planned_start:%H:%M} → return@{planned_return:%Y-%m-%d %H:%M} | car=RESERVED")
+                f"start@{planned_start:%H:%M:%S} → return@{planned_return:%Y-%m-%d %H:%M} | car=RESERVED")
 
     # Execute plans: activate at start, close at return
     for p in plans_materialized:
