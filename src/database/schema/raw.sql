@@ -218,6 +218,58 @@ CREATE INDEX IDX_IOT_ALERTS_STATUS ON IOT_ALERTS (STATUS);
 
 COMMIT;
 
+
+
+-- ============================================================
+-- Table IOT_TELEMETRY pour stocker les données IoT
+-- ============================================================
+
+-- Drop si existe (optionnel)
+DROP TABLE IOT_TELEMETRY CASCADE CONSTRAINTS;
+
+CREATE TABLE IOT_TELEMETRY (
+    TELEMETRY_ID       NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    DEVICE_ID          NUMBER NOT NULL,
+    CAR_ID             NUMBER NOT NULL,
+    RENTAL_ID          NUMBER NOT NULL,
+    TIMESTAMP          TIMESTAMP NOT NULL,
+    LATITUDE           NUMBER(10, 7),
+    LONGITUDE          NUMBER(10, 7),
+    SPEED_KMH          NUMBER(6, 2),
+    ACCELERATION_MS2   NUMBER(6, 3),
+    BRAKE_PRESSURE_BAR NUMBER(5, 2),
+    FUEL_LEVEL_PCT     NUMBER(5, 2),
+    BATTERY_VOLTAGE    NUMBER(4, 2),
+    ENGINE_TEMP_C      NUMBER(5, 2),
+    ODOMETER_KM        NUMBER(10, 0),
+    EVENT_TYPE         VARCHAR2(50),
+    CREATED_AT         TIMESTAMP DEFAULT SYSTIMESTAMP,
+    
+    CONSTRAINT fk_iot_device FOREIGN KEY (DEVICE_ID) 
+        REFERENCES IOT_DEVICES(DEVICE_ID) ON DELETE CASCADE,
+    CONSTRAINT fk_iot_car FOREIGN KEY (CAR_ID) 
+        REFERENCES CARS(CAR_ID) ON DELETE CASCADE,
+    CONSTRAINT fk_iot_rental FOREIGN KEY (RENTAL_ID) 
+        REFERENCES RENTALS(RENTAL_ID) ON DELETE CASCADE
+);
+
+-- Index pour améliorer les performances
+CREATE INDEX idx_iot_rental ON IOT_TELEMETRY(RENTAL_ID);
+CREATE INDEX idx_iot_timestamp ON IOT_TELEMETRY(TIMESTAMP);
+CREATE INDEX idx_iot_device ON IOT_TELEMETRY(DEVICE_ID);
+CREATE INDEX idx_iot_event_type ON IOT_TELEMETRY(EVENT_TYPE);
+
+-- Commentaires
+COMMENT ON TABLE IOT_TELEMETRY IS 'Données télémétriques IoT des véhicules en temps réel';
+COMMENT ON COLUMN IOT_TELEMETRY.TELEMETRY_ID IS 'Identifiant unique de la mesure';
+COMMENT ON COLUMN IOT_TELEMETRY.EVENT_TYPE IS 'Type: ENGINE_START, DRIVING, HARSH_BRAKE, RAPID_ACCEL, IDLE, ENGINE_STOP';
+COMMENT ON COLUMN IOT_TELEMETRY.ACCELERATION_MS2 IS 'Accélération longitudinale en m/s² (négatif = freinage)';
+COMMENT ON COLUMN IOT_TELEMETRY.BRAKE_PRESSURE_BAR IS 'Pression de freinage en bars (0-100)';
+
+
+
+
+
 -- ======================================================================
 -- 3) UTILITY VIEW (inventory)
 -- ======================================================================

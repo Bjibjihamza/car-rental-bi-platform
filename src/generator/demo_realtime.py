@@ -35,6 +35,8 @@ RATES_PER_HOUR = {
     "ELECTRIC": 80,
 }
 
+EXECUTION_MODE = "batch_activate"
+
 # 1 = real time. Example: 60 => 1 minute IRL = 1 hour simulated
 ACCELERATION_FACTOR = 1
 
@@ -273,6 +275,7 @@ def main():
     log("=" * 74)
     log("DEMO TEMPS REEL — 5 utilisateurs / 5 agences (sans RESERVATIONS/RT_EVENTS)")
     log("Assurez-vous que 01_seed_static.py a été exécuté (cars must be AVAILABLE).")
+    log(f"MODE: {EXECUTION_MODE}")
     log("=" * 74)
 
     script_t0 = datetime.now()
@@ -283,10 +286,9 @@ def main():
         cmap = map_table(conn, "SELECT CATEGORY_NAME, CATEGORY_ID FROM CAR_CATEGORIES", "CATEGORY_NAME", "CATEGORY_ID")
         if not bmap or not cmap:
             raise RuntimeError("Static data missing: run 01_seed_static.py first.")
-        # Make category lookup case-insensitive
         cmap = {str(k).upper(): v for k, v in cmap.items()}
 
-    # Plan & insert scheduled rentals immediately
+    # Materialise plans (ne fait que la planification en mémoire)
     plans_materialized = []
     for idx, plan in enumerate(SCENARIO):
         user          = USERS[idx]
@@ -320,6 +322,7 @@ def main():
             plans_materialized.append(
                 dict(
                     idx=idx+1,
+                    user=user,
                     rental_id=rental_id,
                     branch_name=branch_name,
                     category_name=category_name,
@@ -334,7 +337,37 @@ def main():
                 f"client={user['first']} {user['last']} | cat={category_name} | "
                 f"start@{planned_start:%H:%M:%S} → return@{planned_return:%Y-%m-%d %H:%M} | car=RESERVED")
 
-    # Execute plans: activate at start, close at return
+    # ----- MODES -----
+    if EXECUTION_MODE == "batch_schedule":
+        log("✅ Tous les rentals ont été créés (STATUS='IN_PROGRESS', cars='RESERVED'). Fin.")
+        return
+
+    if EXECUTION_MODE == "batch_activate":
+        with engine.begin() as conn:
+            for p in plans_materialized:
+                activate_rental(conn, p["rental_id"], p["car_id"])
+                log(f"✅ START (IMMÉDIAT) RENTAL #{p['rental_id']} | {p['branch_name']} | "
+                    f"car_id={p['car_id']} | start_odo={p['start_odo']} | STATUS=ACTIVE")
+        log("✅ Tous les rentals ont été activés immédiatement. Fin.")
+        return
+
+    if EXECUTION_MODE == "batch_close":
+        with engine.begin() as conn:
+            for p in plans_materialized:
+                # Active d'abord
+                activate_rental(conn, p["rental_id"], p["car_id"])
+                # Simule un retour et clôture immédiatement
+                dur_h    = hours_between(p["planned_start"], p["planned_return"])
+                delta_km = int(30 + dur_h * random.uniform(5, 15))
+                end_odo  = p["start_odo"] + delta_km
+                amount   = compute_amount(p["category_name"], p["planned_start"], p["planned_return"])
+                close_rental(conn, p["rental_id"], p["car_id"], p["planned_return"], end_odo, amount)
+                log(f"🟢 RETURN (IMMÉDIAT) RENTAL #{p['rental_id']} | car_id={p['car_id']} "
+                    f"| return_odo={end_odo} | amount={amount:.2f} {CURRENCY} | STATUS=CLOSED")
+        log("✅ Tous les rentals ont été créés, activés et clôturés immédiatement. Fin.")
+        return
+
+    # ---------- fallback: MODE 'realtime' (comportement original) ----------
     for p in plans_materialized:
         sleep_until(p["planned_start"])
         with engine.begin() as conn:
@@ -354,6 +387,7 @@ def main():
         log(f"🟢 RETURN RENTAL #{p['rental_id']} | car_id={p['car_id']} | return_odo={end_odo} | amount={amount:.2f} {CURRENCY}")
 
     log("🏁 All scheduled rentals processed.")
+
 
 if __name__ == "__main__":
     try:
