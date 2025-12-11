@@ -1,3 +1,10 @@
+# 03_generate_iot_telemetry.py
+# ============================================================
+# Generate synthetic IoT telemetry for next 7 days based on
+# the Oracle car-rental schema. Uses OpenStreetMap (osmnx)
+# to follow *real* roads per city (no more cars in the ocean 😄)
+# ============================================================
+
 import os
 import math
 import random
@@ -5,6 +12,9 @@ from datetime import datetime, timedelta, date
 
 import pandas as pd
 from sqlalchemy import create_engine, text
+
+import osmnx as ox
+import networkx as nx
 
 # ============================================================
 # CONFIG
@@ -68,7 +78,6 @@ CATEGORY_TANK_SIZE = {
     "ELECTRIC": 0,    # batterie, on garde % direct
 }
 
-
 # ============================================================
 # DB CONNECTION
 # ============================================================
@@ -78,7 +87,6 @@ engine = create_engine(
     connect_args={"user": ORACLE_USER, "password": ORACLE_PWD, "dsn": ORACLE_DSN},
     pool_pre_ping=True,
 )
-
 
 # ============================================================
 # UTILS
@@ -181,6 +189,95 @@ def simulate_battery_voltage(is_engine_on):
         return random.uniform(12.2, 12.8)
 
 
+def get_city_center(city):
+    city_u = (city or "").upper()
+    return CITY_COORDS.get(city_u, CITY_COORDS["CASABLANCA"])
+
+
+# ============================================================
+# OSM / ROUTING HELPERS
+# ============================================================
+
+_CITY_GRAPHS = {}
+
+def get_city_graph(city):
+    """
+    Charge (et met en cache) le graphe routier OSM de la ville.
+    """
+    city_u = (city or "").title() + ", Morocco"
+    if city_u in _CITY_GRAPHS:
+        return _CITY_GRAPHS[city_u]
+
+    print(f"🗺️  Loading road graph for {city_u} from OpenStreetMap...")
+    # In modern osmnx versions, edges already have 'length' attribute.
+    G = ox.graph_from_place(city_u, network_type="drive")
+
+    _CITY_GRAPHS[city_u] = G
+    return G
+
+
+def build_road_route_for_trip(city, steps, lat0, lon0):
+    """
+    Construit un trajet aller-retour sur les routes :
+      - départ ~ centre-ville (lat0/lon0)
+      - destination = noeud aléatoire
+      - trajet = chemin le plus court aller + retour (boucle)
+    Renvoie une liste de len = steps+1 de (lat, lon) déjà échantillonnée
+    pour nos pas de 30s.
+    """
+    G = get_city_graph(city)
+
+    # noeud d'origine : le plus proche du centre-ville
+    orig = ox.distance.nearest_nodes(G, lon0, lat0)
+
+    nodes = list(G.nodes)
+    dest = orig
+    tries = 0
+    # choisir une destination différente de l'origine
+    while dest == orig and tries < 50:
+        dest = random.choice(nodes)
+        tries += 1
+
+    # chemin aller + retour sur les routes
+    try:
+        path_out = ox.shortest_path(G, orig, dest, weight="length")
+    except Exception:
+        # fallback : si échec, rester autour de l'origine
+        path_out = [orig]
+
+    path_back = list(reversed(path_out))
+    full_path = path_out + path_back[1:]  # éviter de dupliquer le point central
+
+    # récupérer les coordonnées de chaque noeud du chemin
+    coords_path = [(G.nodes[n]["y"], G.nodes[n]["x"]) for n in full_path]
+
+    # on veut exactement steps+1 points (0..steps) → rééchantillonnage linéaire
+    if len(coords_path) == 1:
+        # chemin trivial : rester au centre
+        return [(lat0, lon0)] * (steps + 1)
+
+    coords_resampled = []
+    for i in range(steps + 1):
+        # position fractionnaire dans le chemin [0, len-1]
+        idx_float = i * (len(coords_path) - 1) / steps
+        idx0 = int(idx_float)
+        idx1 = min(idx0 + 1, len(coords_path) - 1)
+        alpha = idx_float - idx0
+
+        lat0_seg, lon0_seg = coords_path[idx0]
+        lat1_seg, lon1_seg = coords_path[idx1]
+
+        lat = lat0_seg + alpha * (lat1_seg - lat0_seg)
+        lon = lon0_seg + alpha * (lon1_seg - lon0_seg)
+        coords_resampled.append((lat, lon))
+
+    # on force explicitement start/stop = centre agence
+    coords_resampled[0] = (lat0, lon0)
+    coords_resampled[-1] = (lat0, lon0)
+
+    return coords_resampled
+
+
 # ============================================================
 # FETCH CARS & DEVICES FROM DB
 # ============================================================
@@ -266,11 +363,6 @@ def fetch_cars_with_devices():
     return df
 
 
-def get_city_center(city):
-    city_u = (city or "").upper()
-    return CITY_COORDS.get(city_u, CITY_COORDS["CASABLANCA"])
-
-
 # ============================================================
 # TRIP SIMULATION
 # ============================================================
@@ -287,7 +379,7 @@ def generate_trip_points(
     Génère les points de télémétrie pour un trajet :
     - ENGINE_START
     - DRIVING / IDLE (avec vitesses, lat/long, odomètre, accel, freinage, fuel, temp, batterie)
-    - REFUEL éventuel (rare, si fuel < 15%)
+    - REFUEL éventuel
     - ENGINE_STOP
     """
 
@@ -303,10 +395,8 @@ def generate_trip_points(
     total_seconds = trip_duration_min * 60
     steps = max(1, total_seconds // IOT_INTERVAL_SECONDS)
 
-    # Calibration mouvement GPS
-    lat = lat0
-    lon = lon0
-    bearing = random.uniform(0, 360)
+    # 🗺️ Route réelle sur les routes OSM, aller + retour
+    route_coords = build_road_route_for_trip(city, steps, lat0, lon0)
 
     # états init
     rows = []
@@ -319,7 +409,8 @@ def generate_trip_points(
     battery_v = simulate_battery_voltage(is_engine_on=False)
     event_type = "ENGINE_START"
 
-    # Premier point: ENGINE_START (vitesse 0)
+    # Premier point: ENGINE_START au centre agence
+    lat, lon = route_coords[0]
     engine_temp = simulate_engine_temp(engine_temp, speed_kmh, is_engine_on=True)
     acc_ms2 = 0.0
     brake_pressure = 0.0
@@ -345,28 +436,24 @@ def generate_trip_points(
         )
     )
 
-    # Points suivants: DRIVING / IDLE
+    # Points suivants: DRIVING / IDLE sur le trajet routier
     engine_on = True
-    for step in range(1, int(steps)):
+    for step in range(1, steps):
         ts += timedelta(seconds=IOT_INTERVAL_SECONDS)
 
         # vitesse cible selon type de route, avec variations
         base_speed = sample_speed(category, trip_type)
-        # simulate phases: acceleration, cruise, decel
         rel = step / steps
         if rel < 0.1:
-            # phase d'accélération
-            target_speed = base_speed * (rel / 0.1)
+            target_speed = base_speed * (rel / 0.1)     # accélération
         elif rel > 0.9:
-            # phase de décélération
-            target_speed = base_speed * max(0, (1.0 - rel) / 0.1)
+            target_speed = base_speed * max(0, (1.0 - rel) / 0.1)  # décélération
         else:
             target_speed = base_speed
 
-        # un peu de bruit
         speed_kmh = max(0.0, target_speed + random.gauss(0, base_speed * 0.05))
 
-        # IDLE si très faible vitesse
+        # DRIVING vs IDLE
         if speed_kmh < 3.0:
             event_type = "IDLE"
         else:
@@ -378,7 +465,7 @@ def generate_trip_points(
         # Freinage
         brake_pressure = compute_brake_pressure(acc_ms2)
 
-        # Distance et odomètre
+        # Distance & odomètre (basé sur la vitesse, pas sur la longueur exacte de la route)
         dist_km = speed_kmh * IOT_INTERVAL_SECONDS / 3600.0
         odometer_km += dist_km
 
@@ -389,14 +476,8 @@ def generate_trip_points(
         engine_temp = simulate_engine_temp(engine_temp, speed_kmh, is_engine_on=engine_on)
         battery_v = simulate_battery_voltage(is_engine_on=engine_on)
 
-        # GPS: petit déplacement
-        # On change un peu le cap pour ne pas faire une ligne droite parfaite
-        bearing += random.uniform(-5, 5)
-        step_lat_km = dist_km * math.cos(math.radians(bearing))
-        step_lon_km = dist_km * math.sin(math.radians(bearing))
-
-        lat += step_lat_km * deg_per_km_lat()
-        lon += step_lon_km * deg_per_km_lon(lat0)
+        # Position GPS = point correspondant sur la route
+        lat, lon = route_coords[step]
 
         prev_speed_kmh = speed_kmh
 
@@ -421,19 +502,16 @@ def generate_trip_points(
             )
         )
 
-    # Dernier point = ENGINE_STOP, même position que start
-    if rows:
-        last = rows[-1].copy()
-        last["TIMESTAMP"] += timedelta(seconds=IOT_INTERVAL_SECONDS)
-        last["EVENT_TYPE"] = "ENGINE_STOP"
-        last["SPEED_KMH"] = 0.0
-        last["ACCELERATION_MS2"] = 0.0
-        last["BRAKE_PRESSURE_BAR"] = 0.0
-        last["BATTERY_VOLTAGE"] = simulate_battery_voltage(is_engine_on=False)
-        # on ramène la voiture à son point de départ
-        last["LATITUDE"] = lat0
-        last["LONGITUDE"] = lon0
-        rows.append(last)
+    # Dernier point = ENGINE_STOP au même endroit qu'au départ (agence)
+    last = rows[-1].copy()
+    last["TIMESTAMP"] += timedelta(seconds=IOT_INTERVAL_SECONDS)
+    last["EVENT_TYPE"] = "ENGINE_STOP"
+    last["SPEED_KMH"] = 0.0
+    last["ACCELERATION_MS2"] = 0.0
+    last["BRAKE_PRESSURE_BAR"] = 0.0
+    last["BATTERY_VOLTAGE"] = simulate_battery_voltage(is_engine_on=False)
+    last["LATITUDE"], last["LONGITUDE"] = route_coords[-1]  # centre-ville
+    rows.append(last)
 
     # REFUEL éventuel: si fuel < 15% on simule un ravitaillement
     if fuel_pct < 15.0:
@@ -449,7 +527,6 @@ def generate_trip_points(
         rows.append(ref_row)
         fuel_pct = 100.0
 
-    # on renvoie aussi l'odomètre final et le fuel pour enchaîner les jours
     final_odometer = rows[-1]["ODOMETER_KM"]
     final_fuel = rows[-1]["FUEL_LEVEL_PCT"]
     return rows, final_odometer, final_fuel
@@ -521,6 +598,10 @@ def generate_iot_telemetry_csv():
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     cars_df = fetch_cars_with_devices()
+    if cars_df.empty:
+        print("⚠️ Aucun véhicule IoT trouvé en base.")
+        return
+
     all_rows = []
 
     for _, car_row in cars_df.iterrows():
