@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   oracle-xe:
     image: gvenzl/oracle-xe:21
@@ -6,12 +8,38 @@ services:
       - "1521:1521"   # listener
       - "5500:5500"   # EM Express
     environment:
-      ORACLE_PASSWORD: "Admin#123"        # SYSTEM password
-      APP_USER: "carrental"               # app schema auto-created
+      ORACLE_PASSWORD: "Admin#123"   # SYSTEM password
+      APP_USER: "carrental"          # schéma app auto-créé
       APP_USER_PASSWORD: "CarBI#123"
     volumes:
       - oracle-xe-data:/opt/oracle/oradata
     restart: unless-stopped
+    networks:
+      - backend
+
+  api:
+    build:
+      context: ./src/api
+      dockerfile: Dockerfile
+    container_name: car-rental-api
+    depends_on:
+      - oracle-xe
+    environment:
+      ORACLE_HOST: oracle-xe
+      ORACLE_PORT: 1521
+      ORACLE_SERVICE: XEPDB1
+      ORACLE_USER: carrental       # ⚠ mets ici le schéma où tu as tes tables
+      ORACLE_PASSWORD: CarBI#123
+      API_ENV: "dev"
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - backend
 
 volumes:
   oracle-xe-data:
+
+networks:
+  backend:
+    driver: bridge

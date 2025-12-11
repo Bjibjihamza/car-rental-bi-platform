@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+SQLAlchemy>=2.0
+oracledb
+pydantic>=2.0
+python-dotenv
