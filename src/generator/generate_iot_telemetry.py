@@ -700,7 +700,6 @@ def simulate_car_for_period(car_row, start_date, days_forward):
 # ============================================================
 # WRITE TO ORACLE
 # ============================================================
-
 def write_telemetry_to_oracle(all_rows):
     df = pd.DataFrame(all_rows)
     if df.empty:
@@ -734,18 +733,19 @@ def write_telemetry_to_oracle(all_rows):
     df_db.rename(columns={"TIMESTAMP": "EVENT_TS"}, inplace=True)
 
     with engine.begin() as conn:
-        # On purge avant réinsertion
+        # 💣 TRUNCATE AVANT INSERT — comme tu le voulais
         conn.execute(text("TRUNCATE TABLE IOT_TELEMETRY"))
         print("🧹 TRUNCATE IOT_TELEMETRY")
 
+        # ⚠️ IMPORTANT : PAS de method="multi" avec Oracle
         df_db.to_sql(
             "IOT_TELEMETRY",
             conn,
             if_exists="append",
             index=False,
-            method="multi",
-            chunksize=5000,
+            chunksize=5000,   # on garde le chunking mais sans 'multi'
         )
+
     print("✅ Insert Oracle terminé.")
 
 # ============================================================
