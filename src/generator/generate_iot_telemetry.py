@@ -1,15 +1,22 @@
-# 03_generate_iot_telemetry_db.py
+# 03_generate_iot_telemetry.py
 # ============================================================
-# Generate synthetic IoT telemetry for the next month based on
-# the Oracle car-rental schema, and INSERT directly into
-# RAW_LAYER.IOT_TELEMETRY (no CSV files).
+# Generate synthetic IoT telemetry and write it directly
+# into Oracle table IOT_TELEMETRY.
 #
-# Hypothèses :
-#   - Table IOT_TELEMETRY existe comme dans ton DDL Oracle :
-#       EVENT_TS TIMESTAMP, etc.
-#   - Les voitures + devices sont déjà seedés (seed_static.py)
-#   - (Optionnel) La FK FK_IOT_TELE_RENTAL est désactivée si
-#     tu n'as pas encore de lignes cohérentes dans RENTALS.
+# BI-friendly version:
+#   - Rentals can span multiple days (1, 2, 3, 5, 7, 10, 14 days).
+#   - For a given CAR_ID + RENTAL_ID, the rental may cover several days.
+#   - Distance GPS, SPEED_KMH and ODOMETER_KM are coherent.
+#   - In ~70% of days, there is NO driving between 04:00–08:00 and 14:00–16:00.
+#   - Some cars are barely or never rented (fleet realism).
+#
+# Date logic:
+#   - If IOT_TELEMETRY already has data:
+#       start_date = (max(EVENT_TS).date() + 1 day)
+#   - Else:
+#       start_date = date.today()
+#   - Then we simulate DAYS_FORWARD days (~1 month)
+#   - Before insert, we TRUNCATE IOT_TELEMETRY
 # ============================================================
 
 import os
@@ -19,6 +26,7 @@ from datetime import datetime, timedelta, date
 
 import pandas as pd
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 import osmnx as ox
 import networkx as nx
@@ -33,6 +41,7 @@ ORACLE_DSN = "localhost:1521/XEPDB1"
 
 RANDOM_SEED = 42                # reproductible
 IOT_INTERVAL_SECONDS = 30       # fréquence IoT
+DAYS_FORWARD = 31               # ~1 mois glissant
 
 # Fenêtre globale de conduite (hard) – “jamais” hors de ça
 DAY_START_HOUR = 7   # 07h00
@@ -94,7 +103,7 @@ CATEGORY_TANK_SIZE = {
     "SUV": 60,
     "LUXURY": 65,
     "VAN": 75,
-    "ELECTRIC": 0,
+    "ELECTRIC": 0,    # batterie, on garde % direct
 }
 
 # ============================================================
@@ -108,36 +117,40 @@ engine = create_engine(
 )
 
 # ============================================================
+# DATE LOGIC: START DATE FROM DB OR TODAY
+# ============================================================
+
+def get_start_date_from_db_or_today():
+    """
+    Si IOT_TELEMETRY contient déjà des données :
+        start_date = (max(EVENT_TS).date() + 1 jour)
+    Sinon :
+        start_date = date.today()
+    """
+    max_ts = None
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT MAX(EVENT_TS) FROM IOT_TELEMETRY"))
+            max_ts = res.scalar()
+    except SQLAlchemyError as e:
+        print(f"ℹ️ Impossible de lire MAX(EVENT_TS) dans IOT_TELEMETRY : {e}")
+        max_ts = None
+
+    if max_ts:
+        start = (max_ts + timedelta(days=1)).date()
+        print(f"📅 Télémetrie existante jusqu’au {max_ts.date()} → nouveau start_date = {start}")
+        return start
+    else:
+        today = date.today()
+        print(f"📅 Aucune télémetrie en base → start_date = aujourd’hui = {today}")
+        return today
+
+# ============================================================
 # UTILS
 # ============================================================
 
 def setup_random_seed():
     random.seed(RANDOM_SEED)
-
-
-def get_start_date_next_month():
-    """
-    Date de départ = 1er jour du mois prochain.
-    """
-    today = date.today()
-    if today.month == 12:
-        year = today.year + 1
-        month = 1
-    else:
-        year = today.year
-        month = today.month + 1
-    return date(year, month, 1)
-
-
-def get_days_in_month(start_date: date) -> int:
-    """
-    Nombre de jours dans le mois de start_date.
-    """
-    if start_date.month == 12:
-        next_month_date = date(start_date.year + 1, 1, 1)
-    else:
-        next_month_date = date(start_date.year, start_date.month + 1, 1)
-    return (next_month_date - start_date).days
 
 
 def pick_trip_type():
@@ -254,20 +267,29 @@ def sample_rental_duration(max_days: int) -> int:
 # ============================================================
 
 def build_allowed_windows_for_day():
+    """
+    Retourne une liste de fenêtres horaires (start_h, end_h) dans
+    lesquelles on PEUT démarrer un trajet ce jour-là.
+    - Hard window : [DAY_START_HOUR, DAY_END_HOUR]
+    - 70% des jours : on évite 04–08 et 14–16.
+    """
     base_start = DAY_START_HOUR
     base_end = DAY_END_HOUR
 
     avoid = random.random() < PROB_AVOID_FORBIDDEN
+
     if not avoid:
         return [(base_start, base_end)]
 
     windows = []
 
+    # Segment 1 : [8, 14]
     seg1_start = max(base_start, 8)
     seg1_end = min(base_end, 14)
     if seg1_start < seg1_end:
         windows.append((seg1_start, seg1_end))
 
+    # Segment 2 : [16, 21]
     seg2_start = max(base_start, 16)
     seg2_end = base_end
     if seg2_start < seg2_end:
@@ -280,6 +302,11 @@ def build_allowed_windows_for_day():
 
 
 def sample_start_minute_from_windows(windows):
+    """
+    windows : liste de tuples (start_h, end_h) en heures.
+    Retourne un start_minute (minutes depuis 00:00) tiré
+    uniformément sur l'union des fenêtres.
+    """
     segments = []
     total_minutes = 0
 
@@ -328,6 +355,7 @@ def get_city_graph(city):
 def build_road_route_for_trip(city, steps, lat0, lon0):
     G = get_city_graph(city)
 
+    # Node le plus proche du centre donné
     orig = ox.distance.nearest_nodes(G, lon0, lat0)
 
     nodes = list(G.nodes)
@@ -344,9 +372,11 @@ def build_road_route_for_trip(city, steps, lat0, lon0):
         except Exception:
             path_out = None
 
+    # Si pas de chemin trouvé → on reste sur place
     if not path_out or len(path_out) < 2:
         return [(lat0, lon0)] * (steps + 1)
 
+    # Aller-retour
     path_back = list(reversed(path_out))
     full_path = path_out + path_back[1:]
 
@@ -355,6 +385,7 @@ def build_road_route_for_trip(city, steps, lat0, lon0):
     if len(coords_path) == 1:
         return [(lat0, lon0)] * (steps + 1)
 
+    # Resampling sur "steps" points
     coords_resampled = []
     for i in range(steps + 1):
         idx_float = i * (len(coords_path) - 1) / steps
@@ -369,6 +400,7 @@ def build_road_route_for_trip(city, steps, lat0, lon0):
         lon = lon0_seg + alpha * (lon1_seg - lon0_seg)
         coords_resampled.append((lat, lon))
 
+    # On force départ et fin au centre
     coords_resampled[0] = (lat0, lon0)
     coords_resampled[-1] = (lat0, lon0)
 
@@ -407,6 +439,7 @@ def fetch_cars_with_devices():
     orig_cols = list(df.columns)
     df.columns = [c.upper().strip() for c in df.columns]
 
+    # Normalisation DEVICE_ID
     dev_col = None
     for c in df.columns:
         if c == "DEVICE_ID":
@@ -424,6 +457,7 @@ def fetch_cars_with_devices():
     elif dev_col != "DEVICE_ID":
         df.rename(columns={dev_col: "DEVICE_ID"}, inplace=True)
 
+    # Renommage FKs si besoin
     rename_map = {}
     for target in ["CAR_ID", "ODOMETER_KM", "BRANCH_NAME", "CITY", "CATEGORY_NAME"]:
         if target not in df.columns:
@@ -438,6 +472,7 @@ def fetch_cars_with_devices():
     df["CATEGORY_NAME"] = df.get("CATEGORY_NAME", "ECONOMY").fillna("ECONOMY")
     df["ODOMETER_KM"] = df.get("ODOMETER_KM", 0).fillna(0).astype(float)
 
+    # Garder seulement les cars avec DEVICE_ID
     df = df[df["DEVICE_ID"].notna()].copy()
 
     print(f"📦 Loaded {len(df)} cars with IoT devices. (Colonnes réelles: {list(df.columns)})")
@@ -558,6 +593,7 @@ def generate_trip_points(
             )
         )
 
+    # ENGINE_STOP
     last = rows[-1].copy()
     last["TIMESTAMP"] += timedelta(seconds=IOT_INTERVAL_SECONDS)
     last["EVENT_TYPE"] = "ENGINE_STOP"
@@ -567,6 +603,7 @@ def generate_trip_points(
     last["BATTERY_VOLTAGE"] = simulate_battery_voltage(is_engine_on=False)
     rows.append(last)
 
+    # REFUEL éventuel
     if fuel_pct < 15.0:
         ref_ts = rows[-1]["TIMESTAMP"] + timedelta(minutes=5)
         ref_row = rows[-1].copy()
@@ -593,8 +630,9 @@ def simulate_car_for_period(car_row, start_date, days_forward):
     car_id = int(car_row["CAR_ID"])
     print(f"🚗 Simulating car {car_id} ({car_row['LICENSE_PLATE']})")
 
+    # Certaines voitures ne seront jamais louées ce mois-ci
     if random.random() < PROB_CAR_NEVER_RENTED:
-        print(f"   ➜ Car {car_id} has no rentals this month (parking/maintenance).")
+        print(f"   ➜ Car {car_id} has no rentals this period (parking/maintenance).")
         return all_rows
 
     odometer_km = float(car_row["ODOMETER_KM"])
@@ -604,6 +642,7 @@ def simulate_car_for_period(car_row, start_date, days_forward):
     day_index = 0
 
     while day_index < days_forward:
+        # Gap de jours sans location
         if random.random() < 0.3:
             gap_days = random.randint(1, 2)
             day_index += gap_days
@@ -632,10 +671,12 @@ def simulate_car_for_period(car_row, start_date, days_forward):
             if trips_today == 0:
                 continue
 
+            # Windows pour ce jour (70% sans 04–08 & 14–16)
             windows = build_allowed_windows_for_day()
 
             for _ in range(trips_today):
                 start_minute = sample_start_minute_from_windows(windows)
+                # sécurité pour éviter un trajet qui déborde trop la fenêtre hard
                 latest_start = DAY_END_HOUR * 60 - 30
                 start_minute = min(start_minute, latest_start)
 
@@ -661,31 +702,22 @@ def simulate_car_for_period(car_row, start_date, days_forward):
 # ============================================================
 
 def write_telemetry_to_oracle(all_rows):
-    """
-    Insère la télémétrie dans RAW_LAYER.IOT_TELEMETRY.
-    ATTENTION à la FK FK_IOT_TELE_RENTAL si RENTALS n'est pas peuplée.
-    """
-    if not all_rows:
-        print("⚠️ Aucun point de télémétrie à insérer.")
+    df = pd.DataFrame(all_rows)
+    if df.empty:
+        print("⚠️ write_telemetry_to_oracle: dataframe vide, rien à insérer.")
         return
 
-    df = pd.DataFrame(all_rows)
     df.sort_values(["TIMESTAMP", "CAR_ID", "DEVICE_ID"], inplace=True)
-
-    # TIMESTAMP -> EVENT_TS + CREATED_AT
     df["CREATED_AT"] = df["TIMESTAMP"]
-    df.rename(columns={"TIMESTAMP": "EVENT_TS"}, inplace=True)
 
-    # Colonnes non présentes dans la table
-    for col in ["BRANCH_NAME", "CITY"]:
-        if col in df.columns:
-            df.drop(columns=[col], inplace=True)
+    print(f"📝 Préparation insert Oracle : {len(df):,} lignes")
 
-    cols_order = [
+    # On garde uniquement les colonnes qui existent dans IOT_TELEMETRY
+    df_db = df[[
         "DEVICE_ID",
         "CAR_ID",
         "RENTAL_ID",
-        "EVENT_TS",
+        "TIMESTAMP",          # sera renommé en EVENT_TS
         "LATITUDE",
         "LONGITUDE",
         "SPEED_KMH",
@@ -697,27 +729,23 @@ def write_telemetry_to_oracle(all_rows):
         "ODOMETER_KM",
         "EVENT_TYPE",
         "CREATED_AT",
-    ]
-    existing_cols = [c for c in cols_order if c in df.columns]
-    df = df[existing_cols]
+    ]].copy()
 
-    print(f"📝 Préparation insert Oracle : {len(df):,} lignes")
+    df_db.rename(columns={"TIMESTAMP": "EVENT_TS"}, inplace=True)
 
     with engine.begin() as conn:
-        try:
-            conn.execute(text("TRUNCATE TABLE IOT_TELEMETRY"))
-            print("🧹 TRUNCATE IOT_TELEMETRY")
-        except Exception as e:
-            print(f"⚠️ Impossible de TRUNCATE IOT_TELEMETRY ({e}), insertion en append...")
+        # On purge avant réinsertion
+        conn.execute(text("TRUNCATE TABLE IOT_TELEMETRY"))
+        print("🧹 TRUNCATE IOT_TELEMETRY")
 
-        df.to_sql(
+        df_db.to_sql(
             "IOT_TELEMETRY",
             conn,
             if_exists="append",
             index=False,
-            chunksize=10_000,
+            method="multi",
+            chunksize=5000,
         )
-
     print("✅ Insert Oracle terminé.")
 
 # ============================================================
@@ -726,10 +754,10 @@ def write_telemetry_to_oracle(all_rows):
 
 def generate_iot_telemetry_db():
     setup_random_seed()
-    start_date = get_start_date_next_month()
-    days_forward = get_days_in_month(start_date)
+    start_date = get_start_date_from_db_or_today()
+    days_forward = DAYS_FORWARD
 
-    print(f"📅 Generating telemetry from {start_date} for {days_forward} days (full next month).")
+    print(f"📅 Generating telemetry from {start_date} for {days_forward} days (~1 month).")
 
     cars_df = fetch_cars_with_devices()
     if cars_df.empty:
