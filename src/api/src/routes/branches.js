@@ -21,4 +21,31 @@ router.get("/", async (req, res) => {
   }
 });
 
+
+// GET /api/v1/branches/:id
+router.get("/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) return res.status(400).json({ message: "Invalid branch id" });
+
+  let conn;
+  try {
+    conn = await getConnection();
+    const r = await conn.execute(
+      `SELECT BRANCH_ID, BRANCH_NAME, CITY, ADDRESS, PHONE, EMAIL
+       FROM BRANCHES
+       WHERE BRANCH_ID = :id`,
+      { id }
+    );
+    const row = r.rows?.[0];
+    if (!row) return res.status(404).json({ message: "Branch not found" });
+    return res.json(row);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ message: "Server error" });
+  } finally {
+    try { if (conn) await conn.close(); } catch {}
+  }
+});
+
+
 module.exports = router;

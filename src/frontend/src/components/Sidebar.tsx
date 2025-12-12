@@ -1,86 +1,77 @@
 import { NavLink } from "react-router-dom";
 import {
-  LayoutDashboard,
-  Car,
-  Cpu,
-  GitBranch,
-  Bell,
-  Activity,
-  KeyRound,
-  ChevronRight,
-  LogOut
+  LayoutDashboard, Car, Cpu, KeyRound, GitBranch, Bell, Activity, ChevronRight
 } from "lucide-react";
+import { motion } from "framer-motion";
 
-// 1. THIS WAS MISSING: The navigation data array
 const nav = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/cars", label: "Cars", icon: Car },
+  { to: "/cars", label: "Fleet", icon: Car },
   { to: "/devices", label: "IoT Devices", icon: Cpu },
   { to: "/rentals", label: "Rentals", icon: KeyRound },
-  { to: "/branches", label: "Branches", icon: GitBranch },
+  { to: "/branches", label: "Locations", icon: GitBranch },
   { to: "/alerts", label: "Alerts", icon: Bell },
   { to: "/telemetry", label: "Telemetry", icon: Activity },
 ];
 
 export function Sidebar() {
   return (
-    <aside className="hidden lg:flex h-[calc(100vh-2rem)] w-[280px] flex-col rounded-3xl bg-slate-900 text-white shadow-2xl">
-      {/* Brand */}
-      <div className="flex items-center gap-3 px-6 py-8">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500 text-white font-bold shadow-lg shadow-indigo-500/30">
-          DO
-        </div>
-        <div>
-          <div className="font-bold text-lg tracking-tight">DriveOps</div>
-          <div className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">
-            Enterprise
+    <aside className="hidden lg:flex h-[calc(100vh-3rem)] sticky top-6 flex-col justify-between rounded-3xl border border-white/10 bg-neutral-900/80 backdrop-blur-md p-4 shadow-xl">
+      <div>
+        {/* Brand */}
+        <div className="mb-8 flex items-center gap-3 px-2">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white font-bold shadow-lg shadow-indigo-500/20">
+            DO
+          </div>
+          <div>
+            <div className="font-bold text-lg text-white tracking-tight">DriveOps</div>
+            <div className="text-[10px] font-medium text-neutral-500 uppercase tracking-wider">
+              Fleet Command
+            </div>
           </div>
         </div>
+
+        {/* Menu */}
+        <nav className="space-y-1">
+          {nav.map((item) => {
+            const Icon = item.icon;
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  `group relative flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition-all duration-300 ${
+                    isActive
+                      ? "bg-white/10 text-white shadow-inner"
+                      : "text-neutral-400 hover:bg-white/5 hover:text-white"
+                  }`
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    {isActive && (
+                      <motion.div
+                        layoutId="activeNav"
+                        className="absolute left-0 h-6 w-1 rounded-r-full bg-indigo-500"
+                      />
+                    )}
+                    <Icon className={`h-5 w-5 transition-colors ${isActive ? "text-indigo-400" : "text-neutral-500 group-hover:text-white"}`} />
+                    <span>{item.label}</span>
+                  </>
+                )}
+              </NavLink>
+            );
+          })}
+        </nav>
       </div>
 
-      {/* Nav */}
-      <div className="flex-1 space-y-1 px-4 overflow-y-auto">
-        <div className="px-2 mb-2 text-xs font-semibold text-slate-500 uppercase">
-          Main Menu
-        </div>
-        {nav.map((item) => {
-          const Icon = item.icon;
-          return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                `group flex items-center justify-between rounded-xl px-4 py-3 text-sm font-medium transition-all duration-200 
-                ${
-                  isActive
-                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-900/20"
-                    : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                }`
-              }
-            >
-              <div className="flex items-center gap-3">
-                <Icon className="h-5 w-5 opacity-70 group-hover:opacity-100" />
-                <span>{item.label}</span>
-              </div>
-              <ChevronRight className="h-4 w-4 opacity-0 -translate-x-2 transition-all group-hover:opacity-50 group-hover:translate-x-0" />
-            </NavLink>
-          );
-        })}
-      </div>
-
-      {/* Footer User Profile */}
-      <div className="p-4">
-        <div className="flex items-center gap-3 rounded-2xl bg-slate-800 p-4 border border-slate-700">
-          <div className="h-10 w-10 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-200 font-bold border border-indigo-500/30">
-            M
-          </div>
+      {/* User Mini Profile */}
+      <div className="rounded-2xl border border-white/5 bg-white/5 p-3">
+        <div className="flex items-center gap-3">
+          <div className="h-9 w-9 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 border-2 border-neutral-800" />
           <div className="overflow-hidden">
-            <div className="truncate text-sm font-semibold text-white">
-              Manager
-            </div>
-            <div className="truncate text-xs text-slate-400">
-              admin@driveops.com
-            </div>
+            <div className="truncate text-sm font-semibold text-white">Manager</div>
+            <div className="truncate text-xs text-neutral-500">View Profile</div>
           </div>
         </div>
       </div>

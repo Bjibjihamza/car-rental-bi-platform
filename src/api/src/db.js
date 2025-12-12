@@ -1,5 +1,6 @@
-// src/db.js
+// src/api/src/db.js
 const oracledb = require("oracledb");
+
 oracledb.outFormat = oracledb.OUT_FORMAT_OBJECT;
 
 let pool;
@@ -7,40 +8,24 @@ let pool;
 async function initPool() {
   if (pool) return pool;
 
-  const {
-    ORACLE_HOST,
-    ORACLE_PORT,
-    ORACLE_SERVICE,
-    ORACLE_USER,
-    ORACLE_PASSWORD,
-  } = process.env;
-
-  const connectString = `${ORACLE_HOST}:${ORACLE_PORT}/${ORACLE_SERVICE}`;
+  const host = process.env.ORACLE_HOST;
+  const port = process.env.ORACLE_PORT || "1521";
+  const service = process.env.ORACLE_SERVICE || "XEPDB1";
 
   pool = await oracledb.createPool({
-    user: ORACLE_USER,
-    password: ORACLE_PASSWORD,
-    connectString,
+    user: process.env.ORACLE_USER,
+    password: process.env.ORACLE_PASSWORD,
+    connectString: `${host}:${port}/${service}`,
     poolMin: 1,
-    poolMax: 10,
+    poolMax: 5,
     poolIncrement: 1,
   });
-
-  console.log("✅ Oracle pool created:", connectString);
-
-  // safe sanity check
-  const conn = await pool.getConnection();
-  const r = await conn.execute(
-    "SELECT sys_context('USERENV','CON_NAME') AS CON_NAME FROM dual"
-  );
-  console.log("✅ Oracle connected. CON_NAME =", r.rows[0].CON_NAME);
-  await conn.close();
 
   return pool;
 }
 
 async function getConnection() {
-  if (!pool) await initPool();
+  await initPool();
   return pool.getConnection();
 }
 
