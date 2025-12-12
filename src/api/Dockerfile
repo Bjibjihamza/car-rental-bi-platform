@@ -1,16 +1,15 @@
-FROM python:3.11-slim
+FROM node:20-bullseye
 
 WORKDIR /app
 
-# Installer dépendances Python
-RUN pip install --no-cache-dir --upgrade pip
+COPY package*.json ./
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# npm ci needs package-lock.json; npm install works without it
+RUN npm install --omit=dev
 
-# Copier le code
-COPY app ./app
+COPY . .
 
-ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
+EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["npm", "start"]

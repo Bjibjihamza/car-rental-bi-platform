@@ -1,0 +1,101 @@
+############################
+# OS / Editor
+############################
+.DS_Store
+Thumbs.db
+desktop.ini
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+############################
+# Environment / Secrets
+############################
+.env
+.env.*
+!.env.example
+
+############################
+# Node.js (API + Frontend)
+############################
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+############################
+# Frontend (Vite / React / Tailwind)
+############################
+dist/
+build/
+.cache/
+.vite/
+.eslintcache
+
+############################
+# Python
+############################
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.venv/
+venv/
+ENV/
+env/
+pip-wheel-metadata/
+
+############################
+# Jupyter Notebooks
+############################
+.ipynb_checkpoints/
+
+############################
+# Oracle / Database
+############################
+*.dbf
+*.ctl
+*.log
+*.trc
+*.aud
+
+############################
+# Docker
+############################
+docker-data/
+oracle-data/
+**/oracle-xe-data/
+**/oracle-data/
+
+############################
+# Build artifacts
+############################
+coverage/
+*.coverage
+*.out
+*.tmp
+
+############################
+# Logs
+############################
+logs/
+*.log
+
+############################
+# Archives
+############################
+*.zip
+*.tar
+*.tar.gz
+*.rar
+
+############################
+# OS generated files
+############################
+ehthumbs.db
+Icon?

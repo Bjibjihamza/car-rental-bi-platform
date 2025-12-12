@@ -1,9 +1,7 @@
-version: "3.9"
-
 services:
   oracle-xe:
     image: gvenzl/oracle-xe:21
-    container_name: oracle-xe
+    container_name: car-rental-bi-platform-oracle-xe-1
     ports:
       - "1521:1521"
       - "5500:5500"
@@ -13,46 +11,61 @@ services:
       APP_USER_PASSWORD: "CarBI#123"
     volumes:
       - oracle-xe-data:/opt/oracle/oradata
-    restart: unless-stopped
+      - ./src/database:/scripts
     networks:
       - backend
+    restart: unless-stopped
+    healthcheck:
+      # Wait until DB + listener are ready (and PDB is open)
+      test:
+        [
+          "CMD-SHELL",
+          "echo \"select 1 from dual;\" | sqlplus -s system/Admin#123@localhost:1521/XEPDB1 | grep -q 1"
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 60s
 
   api:
     build:
       context: ./src/api
       dockerfile: Dockerfile
-    container_name: car-rental-api
+    container_name: car-rental-bi-platform-api-1
     depends_on:
-      - oracle-xe
+      oracle-xe:
+        condition: service_healthy
     environment:
       ORACLE_HOST: oracle-xe
-      ORACLE_PORT: 1521
-      ORACLE_SERVICE: XEPDB1
-      ORACLE_USER: carrental
-      ORACLE_PASSWORD: CarBI#123
-      API_ENV: "dev"
+      ORACLE_PORT: "1521"
+      ORACLE_SERVICE: "XEPDB1"
+      ORACLE_USER: "raw_layer"
+      ORACLE_PASSWORD: "Raw#123"
+      PORT: "8000"
+      # for frontend CORS (if you enable it in API)
+      FRONTEND_ORIGIN: "http://localhost:5173"
     ports:
       - "8000:8000"
-    restart: unless-stopped
     networks:
       - backend
+    restart: unless-stopped
 
   frontend:
     build:
       context: ./src/frontend
       dockerfile: Dockerfile
-    container_name: car-rental-frontend
+    container_name: car-rental-bi-platform-frontend-1
+    environment:
+      NODE_ENV: development
+      VITE_API_BASE_URL: "http://localhost:8000"
     ports:
       - "5173:5173"
-    environment:
-      # no backend connection for now (you can add VITE_API_URL later)
-      NODE_ENV: development
-    restart: unless-stopped
     networks:
       - frontend
+    restart: unless-stopped
 
 volumes:
-  oracle-xe-data:
+  oracle-xe-data: {}
 
 networks:
   backend:

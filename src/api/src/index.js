@@ -1,0 +1,32 @@
+// src/index.js
+const express = require("express");
+const cors = require("cors");
+const carsRouter = require("./routes/cars");
+const { initPool } = require("./db");
+
+const app = express();
+app.use(express.json());
+
+app.use(
+  cors({
+    origin: ["http://localhost:5173", "http://localhost:5174"],
+    credentials: true,
+  })
+);
+
+app.get("/health", (req, res) => res.json({ status: "ok" }));
+
+// routes
+app.use("/api/v1/cars", carsRouter);
+
+const PORT = process.env.PORT || 8000;
+
+(async () => {
+  try {
+    await initPool(); // start Oracle pool
+    app.listen(PORT, () => console.log(`🚀 API running on :${PORT}`));
+  } catch (e) {
+    console.error("❌ Failed to start API:", e);
+    process.exit(1);
+  }
+})();
