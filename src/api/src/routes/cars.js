@@ -1,9 +1,12 @@
+// src/routes/cars.js
 const express = require("express");
 const router = express.Router();
-const { getConnection } = require("../db"); // adapte selon ton db.js
+const { getConnection } = require("../db");
+const { authMiddleware } = require("../authMiddleware");
 
-router.get("/", async (req, res) => {
-  const branchId = req.query.branchId ? Number(req.query.branchId) : null;
+router.get("/", authMiddleware, async (req, res) => {
+  const user = req.user;
+  const isSupervisor = user.role === "supervisor";
 
   let conn;
   try {
@@ -30,9 +33,9 @@ router.get("/", async (req, res) => {
       LEFT JOIN BRANCHES b ON b.BRANCH_ID = c.BRANCH_ID
     `;
 
-    if (branchId) {
+    if (!isSupervisor) {
       sql += ` WHERE c.BRANCH_ID = :branchId `;
-      binds.branchId = branchId;
+      binds.branchId = user.branchId;
     }
 
     sql += ` ORDER BY c.CAR_ID DESC`;

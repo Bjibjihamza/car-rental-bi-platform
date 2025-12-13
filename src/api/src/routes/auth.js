@@ -1,17 +1,13 @@
 // src/api/src/routes/auth.js
 const express = require("express");
 const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
 const { getConnection } = require("../db");
 
 const router = express.Router();
 
-/**
- * POST /api/v1/auth/login
- * body: { email, password }
- */
 router.post("/login", async (req, res) => {
   const { email, password } = req.body ?? {};
+
   if (!email || !password) {
     return res.status(400).json({ message: "email and password are required" });
   }
@@ -29,7 +25,8 @@ router.post("/login", async (req, res) => {
         LAST_NAME,
         EMAIL,
         MANAGER_PASSWORD,
-        BRANCH_ID
+        BRANCH_ID,
+        ROLE
       FROM MANAGERS
       WHERE LOWER(EMAIL) = LOWER(:email)
       `,
@@ -37,25 +34,42 @@ router.post("/login", async (req, res) => {
     );
 
     const row = r.rows?.[0];
-    if (!row) return res.status(401).json({ message: "Invalid credentials" });
+    if (!row) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
 
-    // si OUT_FORMAT_OBJECT est activé (recommandé)
-    const stored = row.MANAGER_PASSWORD;
+    // Support both OBJECT and ARRAY row formats
+    const get = (key, idx) =>
+      row && typeof row === "object" && !Array.isArray(row) ? row[key] : row[idx];
 
-    // OPTION A (RECOMMANDÉE) : mot de passe hashé bcrypt
-    const looksHashed = typeof stored === "string" && stored.startsWith("$2");
-    const ok = looksHashed ? await bcrypt.compare(password, stored) : (password === stored); // OPTION B fallback demo
+    const managerId   = get("MANAGER_ID", 0);
+    const managerCode = get("MANAGER_CODE", 1);
+    const firstName   = get("FIRST_NAME", 2);
+    const lastName    = get("LAST_NAME", 3);
+    const emailDb     = get("EMAIL", 4);
+    const storedPwd   = String(get("MANAGER_PASSWORD", 5) || "").trim();
+    const branchId    = get("BRANCH_ID", 6);
+    const dbRole      = get("ROLE", 7);
 
-    if (!ok) return res.status(401).json({ message: "Invalid credentials" });
+    // 🔴 PLAINTEXT PASSWORD CHECK (DEV ONLY)
+    if (String(password).trim() !== storedPwd) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // Normalize role for frontend
+    const role =
+      String(dbRole).toUpperCase() === "SUPERVISOR"
+        ? "supervisor"
+        : "manager";
 
     const payload = {
-      managerId: row.MANAGER_ID,
-      email: row.EMAIL,
-      firstName: row.FIRST_NAME,
-      lastName: row.LAST_NAME,
-      branchId: row.BRANCH_ID,
-      managerCode: row.MANAGER_CODE,
-      role: "manager",
+      managerId,
+      managerCode,
+      email: emailDb,
+      firstName,
+      lastName,
+      branchId: branchId ?? null,
+      role,
     };
 
     const token = jwt.sign(payload, process.env.JWT_SECRET, {

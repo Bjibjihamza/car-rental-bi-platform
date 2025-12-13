@@ -1,7 +1,6 @@
 services:
   oracle-xe:
     image: gvenzl/oracle-xe:21
-    container_name: car-rental-bi-platform-oracle-xe-1
     ports:
       - "1521:1521"
       - "5500:5500"
@@ -15,23 +14,28 @@ services:
     networks:
       - backend
     restart: unless-stopped
+
+    # ---- resource limits (goal: keep total stack < ~6GB) ----
+    shm_size: "1g"
+    mem_limit: "4g"
+    cpus: "2.0"
+
     healthcheck:
-      # Wait until DB + listener are ready (and PDB is open)
       test:
         [
           "CMD-SHELL",
-          "echo \"select 1 from dual;\" | sqlplus -s system/Admin#123@localhost:1521/XEPDB1 | grep -q 1"
+          "echo \"select 1 from dual;\" | sqlplus -s system/\"$$ORACLE_PASSWORD\"@localhost:1521/XEPDB1 | grep -q 1"
         ]
       interval: 10s
       timeout: 10s
       retries: 60
-      start_period: 60s
+      start_period: 180s
+
 
   api:
     build:
       context: ./src/api
       dockerfile: Dockerfile
-    container_name: car-rental-bi-platform-api-1
     depends_on:
       oracle-xe:
         condition: service_healthy
@@ -39,25 +43,29 @@ services:
       ORACLE_HOST: oracle-xe
       ORACLE_PORT: "1521"
       ORACLE_SERVICE: "XEPDB1"
+
+      # IMPORTANT: this user/password must exist in the DB
       ORACLE_USER: "raw_layer"
       ORACLE_PASSWORD: "Raw#123"
+
       PORT: "8000"
-      # for frontend CORS (if you enable it in API)
       FRONTEND_ORIGIN: "http://localhost:5173"
       JWT_SECRET: "supersecret_dev_only"
       JWT_EXPIRES_IN: "8h"
-
     ports:
       - "8000:8000"
     networks:
       - backend
     restart: unless-stopped
 
+    # ---- resource limits ----
+    mem_limit: "1g"
+    cpus: "1.0"
+
   frontend:
     build:
       context: ./src/frontend
       dockerfile: Dockerfile
-    container_name: car-rental-bi-platform-frontend-1
     environment:
       NODE_ENV: development
       VITE_API_BASE_URL: "http://localhost:8000"
@@ -65,7 +73,12 @@ services:
       - "5173:5173"
     networks:
       - frontend
+      - backend
     restart: unless-stopped
+
+    # ---- resource limits ----
+    mem_limit: "1g"
+    cpus: "1.0"
 
 volumes:
   oracle-xe-data: {}

@@ -1,9 +1,18 @@
+// src/index.js
 const express = require("express");
 const cors = require("cors");
-
 const { initPool } = require("./db");
-const carsRouter = require("./routes/cars");
+
+// routes
 const authRoutes = require("./routes/auth");
+const carsRouter = require("./routes/cars");
+const branchesRouter = require("./routes/branches");
+const devicesRouter = require("./routes/devices");
+const rentalsRouter = require("./routes/rentals");
+const customersRouter = require("./routes/customers");
+const managersRouter = require("./routes/managers");
+const iotAlertsRouter = require("./routes/iotAlerts");
+const iotTelemetryRouter = require("./routes/iotTelemetry");
 
 const app = express();
 app.use(express.json());
@@ -17,11 +26,15 @@ app.use(
 
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 
-// routes
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/cars", carsRouter);
-app.use("/api/v1/branches", require("./routes/branches"));
-
+app.use("/api/v1/branches", branchesRouter);
+app.use("/api/v1/devices", devicesRouter);
+app.use("/api/v1/rentals", rentalsRouter);
+app.use("/api/v1/customers", customersRouter);
+app.use("/api/v1/managers", managersRouter);
+app.use("/api/v1/iot-alerts", iotAlertsRouter);
+app.use("/api/v1/iot-telemetry", iotTelemetryRouter);
 
 const PORT = process.env.PORT || 8000;
 

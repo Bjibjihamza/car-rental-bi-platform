@@ -5,10 +5,11 @@ export type User = {
   email: string;
   firstName: string;
   lastName: string;
-  branchId: number;
+  branchId: number | null;          // ✅ supervisor => null
   managerCode?: string;
-  role: "manager";
+  role: "manager" | "supervisor";   // ✅ allow both
 };
+
 
 type AuthCtx = {
   token: string | null;   // ✅ bien "token"

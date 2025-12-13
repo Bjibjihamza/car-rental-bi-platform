@@ -1,4 +1,4 @@
-// src/api/src/routes/branches.js
+// src/api/src/routes/customers.js
 const express = require("express");
 const router = express.Router();
 const { getConnection } = require("../db");
@@ -10,24 +10,31 @@ router.get("/", authMiddleware, async (req, res) => {
   try {
     conn = await getConnection();
 
-    let sql = `
-      SELECT BRANCH_ID, BRANCH_NAME, CITY, ADDRESS, PHONE, EMAIL, CREATED_AT
-      FROM BRANCHES
-    `;
     const binds = {};
+    let sql = `
+      SELECT c.CUSTOMER_ID, c.FIRST_NAME, c.LAST_NAME, c.EMAIL, c.PHONE, c.ID_NUMBER, c.CREATED_AT
+      FROM CUSTOMERS c
+    `;
 
     if (!isSupervisor(req)) {
-      sql += ` WHERE BRANCH_ID = :branchId`;
+      sql = `
+        SELECT DISTINCT
+          c.CUSTOMER_ID, c.FIRST_NAME, c.LAST_NAME, c.EMAIL, c.PHONE, c.ID_NUMBER, c.CREATED_AT
+        FROM CUSTOMERS c
+        JOIN RENTALS r ON r.CUSTOMER_ID = c.CUSTOMER_ID
+        WHERE r.BRANCH_ID = :branchId
+        ORDER BY c.CUSTOMER_ID DESC
+      `;
       binds.branchId = requireBranch(req);
+    } else {
+      sql += ` ORDER BY c.CUSTOMER_ID DESC`;
     }
-
-    sql += ` ORDER BY CITY, BRANCH_NAME`;
 
     const r = await conn.execute(sql, binds);
     res.json(r.rows || []);
   } catch (e) {
     console.error(e);
-    res.status(e.status || 500).json({ message: e.message || "Failed" });
+    res.status(e.status || 500).json({ message: e.message || "Failed to fetch customers" });
   } finally {
     try { if (conn) await conn.close(); } catch {}
   }

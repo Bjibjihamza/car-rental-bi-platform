@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 
 /* ================= TYPES ================= */
-
 type CarRow = {
   CAR_ID: number;
   CATEGORY_ID: number;
@@ -13,6 +12,7 @@ type CarRow = {
   MODEL: string;
   MODEL_YEAR: number;
   COLOR: string;
+  IMAGE_URL?: string | null;
   ODOMETER_KM: number;
   STATUS: string;
   BRANCH_ID: number | null;
@@ -20,14 +20,18 @@ type CarRow = {
   BRANCH_CITY?: string | null;
 };
 
-/* ================= CONFIG ================= */
+type BranchRow = {
+  BRANCH_ID: number;
+  BRANCH_NAME: string;
+  CITY: string;
+};
 
+/* ================= CONFIG ================= */
 const API_URL =
   (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/$/, "") ||
   "http://localhost:8000";
 
 /* ================= HELPERS ================= */
-
 function fmtKm(n: number) {
   return new Intl.NumberFormat().format(n) + " km";
 }
@@ -79,9 +83,9 @@ type SortKey =
   | "CREATED_AT";
 
 /* ================= PAGE ================= */
-
 export function CarsPage() {
   const { user, token } = useAuth();
+  const isSup = user?.role === "supervisor";
 
   const [cars, setCars] = useState<CarRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -97,16 +101,37 @@ export function CarsPage() {
   const [selected, setSelected] = useState<CarRow | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  /* ================= FETCH ================= */
+  // Create modal
+  const [createOpen, setCreateOpen] = useState(false);
+  const [branches, setBranches] = useState<BranchRow[]>([]);
+  const [creating, setCreating] = useState(false);
 
+  const [form, setForm] = useState({
+    CATEGORY_ID: 1,
+    DEVICE_ID: null as number | null,
+    VIN: "",
+    LICENSE_PLATE: "",
+    MAKE: "",
+    MODEL: "",
+    MODEL_YEAR: new Date().getFullYear(),
+    COLOR: "",
+    IMAGE_URL: "",
+    ODOMETER_KM: 0,
+    STATUS: "AVAILABLE",
+    BRANCH_ID: "" as any,
+  });
+
+  /* ================= FETCH ================= */
   async function fetchCars() {
-    if (!user?.branchId) return;
+    if (!user) return;
 
     setLoading(true);
     setErr(null);
 
     try {
-      const url = `${API_URL}/api/v1/cars?branchId=${user.branchId}`;
+      const qs = isSup ? "" : `?branchId=${user.branchId}`;
+      const url = `${API_URL}/api/v1/cars${qs}`;
+
       const res = await fetch(url, {
         headers: {
           Accept: "application/json",
@@ -114,8 +139,9 @@ export function CarsPage() {
         },
       });
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as CarRow[];
+      const data = await res.json().catch(() => []);
+      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+
       setCars(Array.isArray(data) ? data : []);
     } catch (e: any) {
       setErr(e?.message || "Failed to load cars");
@@ -124,13 +150,83 @@ export function CarsPage() {
     }
   }
 
+  async function fetchBranches() {
+    if (!user || !isSup) return;
+
+    try {
+      const res = await fetch(`${API_URL}/api/v1/branches`, {
+        headers: {
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      const data = await res.json().catch(() => []);
+      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+
+      setBranches(Array.isArray(data) ? data : []);
+    } catch (e) {
+      // branches non bloquant
+      console.error("fetchBranches:", e);
+    }
+  }
+
+  async function createCar() {
+    if (!user || !isSup) return;
+
+    setCreating(true);
+    try {
+      const payload = {
+        ...form,
+        BRANCH_ID: Number(form.BRANCH_ID),
+        DEVICE_ID: form.DEVICE_ID ? Number(form.DEVICE_ID) : null,
+        IMAGE_URL: form.IMAGE_URL?.trim() ? form.IMAGE_URL.trim() : null,
+      };
+
+      const res = await fetch(`${API_URL}/api/v1/cars`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+
+      setCreateOpen(false);
+      setForm({
+        CATEGORY_ID: 1,
+        DEVICE_ID: null,
+        VIN: "",
+        LICENSE_PLATE: "",
+        MAKE: "",
+        MODEL: "",
+        MODEL_YEAR: new Date().getFullYear(),
+        COLOR: "",
+        IMAGE_URL: "",
+        ODOMETER_KM: 0,
+        STATUS: "AVAILABLE",
+        BRANCH_ID: "" as any,
+      });
+
+      await fetchCars();
+    } catch (e: any) {
+      alert(e?.message || "Failed to create car");
+    } finally {
+      setCreating(false);
+    }
+  }
+
   useEffect(() => {
     fetchCars();
+    fetchBranches();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.branchId]);
+  }, [user?.role, user?.branchId]);
 
   /* ================= FILTERING ================= */
-
   const statusOptions = useMemo(
     () => Array.from(new Set(cars.map((c) => c.STATUS.toUpperCase()))),
     [cars]
@@ -150,14 +246,7 @@ export function CarsPage() {
 
     if (qq) {
       base = base.filter((c) =>
-        [
-          c.MAKE,
-          c.MODEL,
-          c.VIN,
-          c.LICENSE_PLATE,
-          c.STATUS,
-          categoryLabel(c.CATEGORY_ID),
-        ]
+        [c.MAKE, c.MODEL, c.VIN, c.LICENSE_PLATE, c.STATUS, categoryLabel(c.CATEGORY_ID)]
           .join(" ")
           .toLowerCase()
           .includes(qq)
@@ -174,24 +263,15 @@ export function CarsPage() {
     return base;
   }, [cars, q, status, category, sortKey, sortDir]);
 
-  /* ================= STATS ================= */
-
-  const stats = useMemo(() => {
-    const total = cars.length;
-    const available = cars.filter((c) => c.STATUS === "AVAILABLE").length;
-    const rented = cars.filter((c) => c.STATUS === "RENTED").length;
-    const maintenance = cars.filter((c) => c.STATUS === "MAINTENANCE").length;
-    return { total, available, rented, maintenance };
-  }, [cars]);
-
   /* ================= UI ================= */
-
   return (
     <div className="grid gap-4">
       <div className="rounded-2xl border border-slate-700/40 bg-slate-900/60 p-4">
         <div className="flex flex-wrap items-center gap-3 justify-between">
           <div>
-            <div className="text-lg font-extrabold text-slate-100">Cars — My Branch</div>
+            <div className="text-lg font-extrabold text-slate-100">
+              {isSup ? "Cars — All Branches" : "Cars — My Branch"}
+            </div>
             <div className="text-xs text-slate-400">
               {loading ? "Loading…" : `${filtered.length} cars`}
             </div>
@@ -237,6 +317,15 @@ export function CarsPage() {
             >
               Refresh
             </button>
+
+            {isSup && (
+              <button
+                className="h-10 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 px-3 text-sm font-extrabold text-white"
+                onClick={() => setCreateOpen(true)}
+              >
+                + Add Car
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -274,11 +363,7 @@ export function CarsPage() {
                   <td className="px-3 py-3 font-mono text-slate-100">{c.LICENSE_PLATE}</td>
                   <td className="px-3 py-3 text-slate-100">{categoryLabel(c.CATEGORY_ID)}</td>
                   <td className="px-3 py-3">
-                    <span
-                      className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${statusBadgeClass(
-                        c.STATUS
-                      )}`}
-                    >
+                    <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${statusBadgeClass(c.STATUS)}`}>
                       {c.STATUS}
                     </span>
                   </td>
@@ -301,7 +386,7 @@ export function CarsPage() {
             {!loading && filtered.length === 0 && (
               <tr>
                 <td colSpan={10} className="px-4 py-6 text-center text-slate-400">
-                  No cars found for your branch
+                  No cars found
                 </td>
               </tr>
             )}
@@ -309,7 +394,7 @@ export function CarsPage() {
         </table>
       </div>
 
-      {/* DRAWER */}
+      {/* DETAILS DRAWER */}
       {drawerOpen && selected && (
         <div className="fixed inset-0 z-40 bg-black/50 flex justify-end">
           <div className="w-[420px] bg-slate-950 p-4">
@@ -317,17 +402,139 @@ export function CarsPage() {
               <div className="font-extrabold text-slate-100">
                 {selected.MAKE} {selected.MODEL}
               </div>
-              <button
-                className="text-slate-400 hover:text-slate-100"
-                onClick={() => setDrawerOpen(false)}
-              >
+              <button className="text-slate-400 hover:text-slate-100" onClick={() => setDrawerOpen(false)}>
                 ✕
               </button>
             </div>
 
-            <pre className="mt-4 text-xs text-slate-300">
-              {JSON.stringify(selected, null, 2)}
-            </pre>
+            <pre className="mt-4 text-xs text-slate-300">{JSON.stringify(selected, null, 2)}</pre>
+          </div>
+        </div>
+      )}
+
+      {/* CREATE MODAL */}
+      {createOpen && isSup && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex justify-end">
+          <div className="w-[520px] bg-slate-950 p-5 overflow-auto">
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-extrabold text-slate-100">Add Car</div>
+              <button className="text-slate-400 hover:text-slate-100" onClick={() => setCreateOpen(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              <input
+                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                placeholder="VIN"
+                value={form.VIN}
+                onChange={(e) => setForm({ ...form, VIN: e.target.value })}
+              />
+              <input
+                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                placeholder="License Plate"
+                value={form.LICENSE_PLATE}
+                onChange={(e) => setForm({ ...form, LICENSE_PLATE: e.target.value })}
+              />
+              <input
+                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                placeholder="Make"
+                value={form.MAKE}
+                onChange={(e) => setForm({ ...form, MAKE: e.target.value })}
+              />
+              <input
+                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                placeholder="Model"
+                value={form.MODEL}
+                onChange={(e) => setForm({ ...form, MODEL: e.target.value })}
+              />
+
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                  placeholder="Model Year"
+                  type="number"
+                  value={form.MODEL_YEAR}
+                  onChange={(e) => setForm({ ...form, MODEL_YEAR: Number(e.target.value) })}
+                />
+                <input
+                  className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                  placeholder="Color"
+                  value={form.COLOR}
+                  onChange={(e) => setForm({ ...form, COLOR: e.target.value })}
+                />
+              </div>
+
+              <input
+                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                placeholder="Image URL (https://...)"
+                value={form.IMAGE_URL}
+                onChange={(e) => setForm({ ...form, IMAGE_URL: e.target.value })}
+              />
+
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                  placeholder="Odometer KM"
+                  type="number"
+                  value={form.ODOMETER_KM}
+                  onChange={(e) => setForm({ ...form, ODOMETER_KM: Number(e.target.value) })}
+                />
+
+                <select
+                  className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                  value={form.STATUS}
+                  onChange={(e) => setForm({ ...form, STATUS: e.target.value })}
+                >
+                  {["AVAILABLE", "RESERVED", "RENTED", "MAINTENANCE", "RETIRED"].map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <select
+                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                value={form.BRANCH_ID}
+                onChange={(e) => setForm({ ...form, BRANCH_ID: e.target.value })}
+              >
+                <option value="">Select branch...</option>
+                {branches.map((b) => (
+                  <option key={b.BRANCH_ID} value={String(b.BRANCH_ID)}>
+                    {b.CITY} — {b.BRANCH_NAME}
+                  </option>
+                ))}
+              </select>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  className="h-10 rounded-xl bg-slate-800 px-4 text-slate-100"
+                  onClick={() => setCreateOpen(false)}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  className="h-10 rounded-xl bg-indigo-600 px-4 font-extrabold text-white disabled:opacity-60"
+                  onClick={createCar}
+                  disabled={
+                    creating ||
+                    !form.VIN.trim() ||
+                    !form.LICENSE_PLATE.trim() ||
+                    !form.MAKE.trim() ||
+                    !form.MODEL.trim() ||
+                    !form.BRANCH_ID
+                  }
+                >
+                  {creating ? "Saving..." : "Save"}
+                </button>
+              </div>
+
+              <div className="text-xs text-slate-500">
+                Supervisor only — managers can’t create cars.
+              </div>
+            </div>
           </div>
         </div>
       )}
