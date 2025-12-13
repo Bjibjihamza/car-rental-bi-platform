@@ -1,6 +1,12 @@
-// src/frontend/src/pages/DevicesPage.tsx
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { Card } from "../components/Card";
+import { DataTable } from "../components/DataTable";
+import { Badge } from "../components/Badge";
+import { 
+  RefreshCw, Plus, X, Search, Cpu, Signal, 
+  Wifi, WifiOff, AlertCircle, Smartphone, Edit, Trash2 
+} from "lucide-react";
 
 /* ================= TYPES ================= */
 type DeviceRow = {
@@ -16,12 +22,11 @@ type DeviceRow = {
   BRANCH_ID: number | null;
 };
 
-/* ================= CONFIG ================= */
-const API_URL =
-  (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/$/, "") ||
-  "http://localhost:8000";
+type BranchOption = { BRANCH_ID: number; BRANCH_NAME: string; CITY: string };
 
-/* ================= HELPERS ================= */
+/* ================= CONFIG & HELPERS ================= */
+const API_URL = (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
+
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -32,20 +37,30 @@ function fmtDate(iso: string | null) {
   }).format(d);
 }
 
-function statusBadgeClass(status: string) {
-  const s = status.toUpperCase();
-  if (s === "ACTIVE") return "bg-emerald-500/15 text-emerald-300 border-emerald-500/25";
-  if (s === "INACTIVE") return "bg-amber-500/15 text-amber-300 border-amber-500/25";
-  return "bg-slate-500/15 text-slate-300 border-slate-500/25";
+function badgeTone(status: string): "green" | "amber" | "gray" | "red" | "blue" {
+  const s = String(status).toUpperCase();
+  if (s === "ACTIVE") return "green";
+  if (s === "INACTIVE") return "amber";
+  if (s === "RETIRED") return "red";
+  return "gray";
 }
 
-function StatCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-2xl border border-slate-700/40 bg-slate-900/60 p-4">
-      <div className="text-xs text-slate-400">{label}</div>
-      <div className="mt-1 text-2xl font-extrabold text-slate-100">{value}</div>
-    </div>
-  );
+// Local Stat Component
+function NetworkStat({ label, value, icon: Icon, color }: any) {
+    return (
+        <div className="relative overflow-hidden rounded-2xl border border-white/5 bg-[#121212]/60 p-5 shadow-xl">
+            <div className={`absolute -right-4 -top-4 h-20 w-20 rounded-full ${color} opacity-10 blur-xl`}></div>
+            <div className="flex items-center gap-3">
+                <div className={`rounded-lg p-2 ${color} bg-opacity-10 text-white`}>
+                    <Icon size={20} />
+                </div>
+                <div>
+                    <div className="text-xs font-medium text-neutral-500 uppercase tracking-wide">{label}</div>
+                    <div className="text-2xl font-bold text-white">{value}</div>
+                </div>
+            </div>
+        </div>
+    );
 }
 
 /* ================= PAGE ================= */
@@ -54,6 +69,7 @@ export function DevicesPage() {
   const isSup = user?.role === "supervisor";
 
   const [devices, setDevices] = useState<DeviceRow[]>([]);
+  const [branches, setBranches] = useState<BranchOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -64,339 +80,358 @@ export function DevicesPage() {
   const [selected, setSelected] = useState<DeviceRow | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // Create modal
-  const [createOpen, setCreateOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
+  // Modal State
+  const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editMode, setEditMode] = useState<DeviceRow | null>(null); // Null = Create
+
   const [form, setForm] = useState({
     DEVICE_CODE: "",
     DEVICE_IMEI: "",
     FIRMWARE_VERSION: "",
     STATUS: "INACTIVE",
+    BRANCH_ID: "" as any, // New Field
   });
 
+  /* ================= API CALLS ================= */
   async function fetchDevices() {
     if (!user) return;
-
-    setLoading(true);
-    setErr(null);
-
+    setLoading(true); setErr(null);
     try {
       const res = await fetch(`${API_URL}/api/v1/devices`, {
-        headers: {
-          Accept: "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
-
-      const data = await res.json().catch(() => []);
+      const data = await res.json();
       if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
-
       setDevices(Array.isArray(data) ? data : []);
-    } catch (e: any) {
-      setErr(e?.message || "Failed to load devices");
-    } finally {
-      setLoading(false);
-    }
+    } catch (e: any) { setErr(e?.message || "Failed to load devices"); } 
+    finally { setLoading(false); }
   }
 
-  async function createDevice() {
+  // Fetch branches for the dropdown
+  async function fetchBranches() {
     if (!user || !isSup) return;
+    try {
+      const res = await fetch(`${API_URL}/api/v1/branches`, {
+        headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      const data = await res.json();
+      if (res.ok) setBranches(Array.isArray(data) ? data : []);
+    } catch {}
+  }
 
-    setCreating(true);
+  async function saveDevice() {
+    if (!user || !isSup) return;
+    setSaving(true);
     try {
       const payload = {
         DEVICE_CODE: form.DEVICE_CODE.trim(),
-        DEVICE_IMEI: form.DEVICE_IMEI.trim() ? form.DEVICE_IMEI.trim() : null,
-        FIRMWARE_VERSION: form.FIRMWARE_VERSION.trim() ? form.FIRMWARE_VERSION.trim() : null,
+        DEVICE_IMEI: form.DEVICE_IMEI.trim() || null,
+        FIRMWARE_VERSION: form.FIRMWARE_VERSION.trim() || null,
         STATUS: form.STATUS,
+        BRANCH_ID: form.BRANCH_ID ? Number(form.BRANCH_ID) : null,
       };
 
-      const res = await fetch(`${API_URL}/api/v1/devices`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+      const url = editMode 
+        ? `${API_URL}/api/v1/devices/${editMode.DEVICE_ID}` 
+        : `${API_URL}/api/v1/devices`;
+      
+      const method = editMode ? "PUT" : "POST";
+
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json", Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json().catch(() => ({}));
+      const data = await res.json();
       if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
 
-      setCreateOpen(false);
-      setForm({ DEVICE_CODE: "", DEVICE_IMEI: "", FIRMWARE_VERSION: "", STATUS: "INACTIVE" });
+      closeModal();
       await fetchDevices();
-    } catch (e: any) {
-      alert(e?.message || "Failed to create device");
-    } finally {
-      setCreating(false);
-    }
+    } catch (e: any) { alert(e?.message || "Operation failed"); } 
+    finally { setSaving(false); }
   }
 
-  useEffect(() => {
-    fetchDevices();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  async function deleteDevice(id: number) {
+      if (!user || !isSup) return;
+      if (!window.confirm("Are you sure? This cannot be undone.")) return;
+
+      try {
+          const res = await fetch(`${API_URL}/api/v1/devices/${id}`, {
+              method: "DELETE",
+              headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data?.message || "Failed to delete");
+          await fetchDevices();
+      } catch (e: any) { alert(e.message); }
+  }
+
+  // --- HELPERS ---
+  function openCreate() {
+      setEditMode(null);
+      setForm({ DEVICE_CODE: "", DEVICE_IMEI: "", FIRMWARE_VERSION: "", STATUS: "INACTIVE", BRANCH_ID: "" });
+      setModalOpen(true);
+  }
+
+  function openEdit(row: DeviceRow) {
+      setEditMode(row);
+      setForm({
+          DEVICE_CODE: row.DEVICE_CODE,
+          DEVICE_IMEI: row.DEVICE_IMEI || "",
+          FIRMWARE_VERSION: row.FIRMWARE_VERSION || "",
+          STATUS: row.STATUS,
+          BRANCH_ID: row.BRANCH_ID ? String(row.BRANCH_ID) : ""
+      });
+      setModalOpen(true);
+  }
+
+  function closeModal() {
+      setModalOpen(false);
+      setEditMode(null);
+  }
+
+  useEffect(() => { 
+      fetchDevices(); 
+      if (isSup) fetchBranches();
   }, [user?.role, user?.branchId]);
 
-  const statusOptions = useMemo(
-    () => Array.from(new Set(devices.map((d) => String(d.STATUS || "").toUpperCase()))).filter(Boolean),
-    [devices]
-  );
-
+  /* ================= FILTERING & STATS ================= */
   const filtered = useMemo(() => {
     let base = devices.slice();
     const qq = q.trim().toLowerCase();
-
     if (status !== "ALL") base = base.filter((d) => String(d.STATUS).toUpperCase() === status);
-
     if (qq) {
       base = base.filter((d) =>
-        [
-          d.DEVICE_CODE,
-          d.DEVICE_IMEI || "",
-          d.FIRMWARE_VERSION || "",
-          d.STATUS,
-          d.CAR_ID ? `CAR ${d.CAR_ID}` : "FREE",
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(qq)
+        [d.DEVICE_CODE, d.DEVICE_IMEI || "", d.FIRMWARE_VERSION || "", d.STATUS, d.CAR_ID ? `CAR ${d.CAR_ID}` : "FREE"]
+          .join(" ").toLowerCase().includes(qq)
       );
     }
-
     return base;
   }, [devices, q, status]);
 
-  const total = devices.length;
-  const active = devices.filter((d) => String(d.STATUS).toUpperCase() === "ACTIVE").length;
-  const inactive = devices.filter((d) => String(d.STATUS).toUpperCase() === "INACTIVE").length;
-  const free = devices.filter((d) => !d.CAR_ID).length;
+  const stats = useMemo(() => ({
+      total: devices.length,
+      active: devices.filter(d => d.STATUS === 'ACTIVE').length,
+      inactive: devices.filter(d => d.STATUS === 'INACTIVE').length,
+      free: devices.filter(d => !d.CAR_ID).length
+  }), [devices]);
+
+  /* ================= RENDER ================= */
+  const headerRight = (
+    <div className="flex flex-wrap items-center gap-3">
+        <div className="relative group hidden md:block">
+            <input
+                className="h-9 w-56 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white focus:w-64 focus:border-indigo-500/50 outline-none transition-all placeholder:text-neutral-500"
+                placeholder="Search code, IMEI..."
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+            />
+        </div>
+
+        <select 
+            className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none focus:border-indigo-500/50"
+            value={status} onChange={(e) => setStatus(e.target.value)}
+        >
+            <option value="ALL" className="bg-[#18181b]">All Status</option>
+            {["ACTIVE", "INACTIVE", "RETIRED"].map(s => <option key={s} value={s} className="bg-[#18181b]">{s}</option>)}
+        </select>
+
+        <button onClick={fetchDevices} className="h-9 w-9 grid place-items-center rounded-lg border border-white/10 bg-white/5 text-neutral-400 hover:text-white hover:bg-white/10 transition">
+            <RefreshCw size={16} />
+        </button>
+
+        {isSup && (
+            <button 
+                onClick={openCreate}
+                className="flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-500 transition"
+            >
+                <Plus size={16} /> Register Device
+            </button>
+        )}
+    </div>
+  );
 
   return (
-    <div className="grid gap-4">
-      {/* HEADER */}
-      <div className="rounded-2xl border border-slate-700/40 bg-slate-900/60 p-4">
-        <div className="flex flex-wrap items-center gap-3 justify-between">
-          <div>
-            <div className="text-lg font-extrabold text-slate-100">IoT Devices</div>
-            <div className="text-xs text-slate-400">
-              {loading ? "Loading…" : `${filtered.length} devices`}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <input
-              className="h-10 w-[280px] rounded-xl border border-slate-700/50 bg-slate-950/40 px-3 text-sm text-slate-100"
-              placeholder="Search… (code, imei, firmware, car_id)"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-
-            <select
-              className="h-10 rounded-xl border border-slate-700/50 bg-slate-950/40 px-3 text-sm text-slate-100"
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-            >
-              <option value="ALL">All statuses</option>
-              {statusOptions.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-
-            <button
-              className="h-10 rounded-xl border border-indigo-400/60 bg-indigo-500/20 px-3 text-sm text-slate-100"
-              onClick={fetchDevices}
-            >
-              Refresh
-            </button>
-
-            {isSup && (
-              <button
-                className="h-10 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 px-3 text-sm font-extrabold text-white"
-                onClick={() => setCreateOpen(true)}
-              >
-                + Register device
-              </button>
-            )}
-          </div>
-        </div>
+    <div className="space-y-6 animate-in fade-in duration-500">
+      
+      {/* 1. Stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <NetworkStat label="Total Devices" value={stats.total} icon={Cpu} color="bg-indigo-500" />
+        <NetworkStat label="Online Active" value={stats.active} icon={Wifi} color="bg-emerald-500" />
+        <NetworkStat label="Inactive" value={stats.inactive} icon={WifiOff} color="bg-amber-500" />
+        <NetworkStat label="Unassigned" value={stats.free} icon={AlertCircle} color="bg-slate-500" />
       </div>
 
-      {/* STATS */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard label="Total devices" value={total} />
-        <StatCard label="Active" value={active} />
-        <StatCard label="Inactive" value={inactive} />
-        <StatCard label="Unassigned" value={free} />
-      </div>
+      {/* 2. Main Card */}
+      <Card 
+        title="IoT Device Registry" 
+        subtitle="Manage hardware, firmware, and vehicle assignments"
+        right={headerRight}
+        className="min-h-[600px]"
+      >
+        {err && <div className="mb-6 rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">{err}</div>}
 
-      {err && (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
-          {err}
-        </div>
-      )}
+        <DataTable 
+            rows={filtered}
+            cols={[
+                { key: "DEVICE_ID", header: "ID", render: r => <span className="font-mono text-neutral-500">#{r.DEVICE_ID}</span> },
+                { key: "DEVICE_CODE", header: "Device Code", render: r => (
+                    <div className="flex items-center gap-2">
+                        <Smartphone size={16} className="text-neutral-500"/>
+                        <span className="font-medium text-white">{r.DEVICE_CODE}</span>
+                    </div>
+                )},
+                { key: "DEVICE_IMEI", header: "IMEI", render: r => <span className="font-mono text-xs text-neutral-400">{r.DEVICE_IMEI || "—"}</span> },
+                { key: "STATUS", header: "Status", render: r => <Badge tone={badgeTone(r.STATUS)}>{r.STATUS}</Badge> },
+                { key: "BRANCH_ID", header: "Branch", render: r => r.BRANCH_ID ? <span className="text-xs text-neutral-400">Branch #{r.BRANCH_ID}</span> : <span className="text-xs text-neutral-600 italic">Global</span> },
+                { key: "CAR_ID", header: "Assignment", render: r => r.CAR_ID ? (
+                    <Badge tone="blue">Vehicle #{r.CAR_ID}</Badge>
+                ) : (
+                    <span className="text-xs text-neutral-500 italic">Unassigned</span>
+                )},
+                { key: "FIRMWARE_VERSION", header: "Firmware", render: r => <span className="font-mono text-xs text-neutral-400 bg-white/5 px-1.5 py-0.5 rounded">{r.FIRMWARE_VERSION || "v1.0"}</span> },
+                { key: "LAST_SEEN_AT", header: "Last Seen", render: r => (
+                    <div className="flex items-center gap-2 text-xs">
+                        <Signal size={12} className={r.STATUS === 'ACTIVE' ? "text-emerald-500" : "text-neutral-600"} />
+                        {fmtDate(r.LAST_SEEN_AT)}
+                    </div>
+                )},
+                { key: "actions", header: "", render: r => (
+                    <div className="flex items-center gap-2 justify-end">
+                        <button onClick={() => { setSelected(r); setDrawerOpen(true); }} className="text-xs font-medium text-indigo-400 hover:text-indigo-300 hover:underline">
+                            View
+                        </button>
+                        {isSup && (
+                            <>
+                                <button onClick={() => openEdit(r)} className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-white/10 transition" title="Edit">
+                                    <Edit size={14}/>
+                                </button>
+                                <button onClick={() => deleteDevice(r.DEVICE_ID)} className="p-1.5 rounded-lg text-neutral-400 hover:text-red-400 hover:bg-red-500/10 transition" title="Delete">
+                                    <Trash2 size={14}/>
+                                </button>
+                            </>
+                        )}
+                    </div>
+                )}
+            ]}
+        />
+      </Card>
 
-      {/* TABLE */}
-      <div className="overflow-auto rounded-2xl border border-slate-700/30 bg-slate-900/60">
-        <table className="min-w-[980px] w-full">
-          <thead>
-            <tr className="text-xs text-slate-400">
-              {["ID", "Code", "IMEI", "Firmware", "Status", "Assigned", "Last seen", "Created"].map((h) => (
-                <th key={h} className="px-3 py-3 text-left">
-                  {h}
-                </th>
-              ))}
-              <th />
-            </tr>
-          </thead>
-
-          <tbody>
-            {!loading &&
-              filtered.map((d) => (
-                <tr key={d.DEVICE_ID} className="border-t border-slate-700/20 hover:bg-slate-700/10">
-                  <td className="px-3 py-3 font-mono text-slate-100">#{d.DEVICE_ID}</td>
-                  <td className="px-3 py-3 text-slate-100">{d.DEVICE_CODE}</td>
-                  <td className="px-3 py-3 font-mono text-slate-100">{d.DEVICE_IMEI || "—"}</td>
-                  <td className="px-3 py-3 text-slate-100">{d.FIRMWARE_VERSION || "—"}</td>
-                  <td className="px-3 py-3">
-                    <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${statusBadgeClass(d.STATUS)}`}>
-                      {String(d.STATUS || "").toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3">
-                    {d.CAR_ID ? (
-                      <span className="inline-flex rounded-full border border-emerald-500/25 bg-emerald-500/15 px-3 py-1 text-xs font-bold text-emerald-300">
-                        CAR #{d.CAR_ID}
-                      </span>
-                    ) : (
-                      <span className="inline-flex rounded-full border border-sky-500/25 bg-sky-500/15 px-3 py-1 text-xs font-bold text-sky-300">
-                        FREE
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-3 text-slate-400">{fmtDate(d.LAST_SEEN_AT)}</td>
-                  <td className="px-3 py-3 text-slate-400">{fmtDate(d.CREATED_AT)}</td>
-                  <td className="px-3 py-3">
-                    <button
-                      className="rounded-xl bg-slate-700/30 px-3 py-2 text-xs text-slate-100"
-                      onClick={() => {
-                        setSelected(d);
-                        setDrawerOpen(true);
-                      }}
-                    >
-                      Details
-                    </button>
-                  </td>
-                </tr>
-              ))}
-
-            {!loading && filtered.length === 0 && (
-              <tr>
-                <td colSpan={9} className="px-4 py-10 text-center text-slate-400">
-                  <div className="text-base font-bold">No devices found</div>
-                  <div className="text-sm mt-1">
-                    {isSup ? "Register a new IoT device to get started." : "No devices assigned to your branch yet."}
-                  </div>
-                </td>
-              </tr>
-            )}
-
-            {loading && (
-              <tr>
-                <td colSpan={9} className="px-4 py-10 text-center text-slate-400">
-                  Loading…
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* DETAILS DRAWER */}
+      {/* 3. DETAILS DRAWER */}
       {drawerOpen && selected && (
-        <div className="fixed inset-0 z-40 bg-black/50 flex justify-end">
-          <div className="w-[460px] bg-slate-950 p-4">
-            <div className="flex justify-between items-center">
-              <div className="font-extrabold text-slate-100">Device #{selected.DEVICE_ID}</div>
-              <button className="text-slate-400 hover:text-slate-100" onClick={() => setDrawerOpen(false)}>
-                ✕
-              </button>
-            </div>
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="h-full w-full max-w-md border-l border-white/10 bg-[#09090b] shadow-2xl animate-in slide-in-from-right duration-300" onClick={(e) => e.stopPropagation()}>
+                <div className="flex h-full flex-col">
+                    <div className="border-b border-white/10 px-6 py-4 flex items-center justify-between bg-[#121212]">
+                        <h2 className="text-lg font-bold text-white">Device Details</h2>
+                        <button onClick={() => setDrawerOpen(false)} className="rounded-lg p-2 hover:bg-white/10 text-neutral-400 hover:text-white"><X size={20}/></button>
+                    </div>
 
-            <pre className="mt-4 text-xs text-slate-300">{JSON.stringify(selected, null, 2)}</pre>
-          </div>
+                    <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                        <div className="rounded-xl bg-gradient-to-br from-[#1e1e24] to-[#121212] p-6 border border-white/5 text-center">
+                            <div className="mx-auto h-16 w-16 rounded-full bg-indigo-500/10 grid place-items-center mb-4">
+                                <Cpu size={32} className="text-indigo-400" />
+                            </div>
+                            <h3 className="text-2xl font-mono font-bold text-white tracking-wider">{selected.DEVICE_CODE}</h3>
+                            <div className="mt-2 flex justify-center gap-2">
+                                <Badge tone={badgeTone(selected.STATUS)}>{selected.STATUS}</Badge>
+                                <span className="text-xs text-neutral-500 py-1">ID: #{selected.DEVICE_ID}</span>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4 rounded-xl border border-white/5 bg-white/[0.02] p-4">
+                            <h4 className="text-sm font-bold text-white border-b border-white/5 pb-2">Technical Specs</h4>
+                            <div className="grid grid-cols-2 gap-y-4 text-sm">
+                                <div><div className="text-neutral-500 text-xs">IMEI</div><div className="text-white font-mono">{selected.DEVICE_IMEI || "—"}</div></div>
+                                <div><div className="text-neutral-500 text-xs">Firmware</div><div className="text-white font-mono">{selected.FIRMWARE_VERSION || "—"}</div></div>
+                                <div><div className="text-neutral-500 text-xs">Registered</div><div className="text-white">{fmtDate(selected.CREATED_AT)}</div></div>
+                                <div><div className="text-neutral-500 text-xs">Last Ping</div><div className="text-white">{fmtDate(selected.LAST_SEEN_AT)}</div></div>
+                                <div><div className="text-neutral-500 text-xs">Assigned Branch</div><div className="text-white">{selected.BRANCH_ID ? `Branch #${selected.BRANCH_ID}` : "Global / Unassigned"}</div></div>
+                            </div>
+                        </div>
+
+                        {selected.CAR_ID ? (
+                             <div className="rounded-xl bg-emerald-500/10 p-4 border border-emerald-500/20">
+                                <h4 className="text-sm font-bold text-emerald-300 mb-1 flex items-center gap-2">Active Assignment</h4>
+                                <p className="text-xs text-emerald-200/60">This device is currently linked to Vehicle ID #{selected.CAR_ID}.</p>
+                             </div>
+                        ) : (
+                             <div className="rounded-xl bg-amber-500/10 p-4 border border-amber-500/20">
+                                <h4 className="text-sm font-bold text-amber-300 mb-1 flex items-center gap-2">Unassigned</h4>
+                                <p className="text-xs text-amber-200/60">This device is available for new vehicle installation.</p>
+                             </div>
+                        )}
+                    </div>
+                </div>
+            </div>
         </div>
       )}
 
-      {/* CREATE MODAL */}
-      {createOpen && isSup && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex justify-end">
-          <div className="w-[520px] bg-slate-950 p-5 overflow-auto">
-            <div className="flex items-center justify-between">
-              <div className="text-lg font-extrabold text-slate-100">Register IoT Device</div>
-              <button className="text-slate-400 hover:text-slate-100" onClick={() => setCreateOpen(false)}>
-                ✕
-              </button>
+      {/* 4. CREATE / EDIT MODAL */}
+      {modalOpen && isSup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm px-4">
+            <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-[#121212] shadow-2xl animate-in zoom-in-95 duration-200">
+                <div className="flex items-center justify-between border-b border-white/10 px-6 py-4 bg-[#18181b]">
+                    <h3 className="text-lg font-bold text-white">{editMode ? "Edit Device" : "Register IoT Device"}</h3>
+                    <button onClick={closeModal} className="text-neutral-400 hover:text-white"><X size={20}/></button>
+                </div>
+                
+                <div className="p-6 space-y-4">
+                    <div className="space-y-1">
+                        <label className="text-xs font-medium text-neutral-400">Device Code (Serial)</label>
+                        <input className="w-full rounded-xl bg-neutral-900 border border-white/10 px-3 py-2.5 text-white text-sm focus:border-indigo-500 outline-none transition" 
+                            value={form.DEVICE_CODE} onChange={e => setForm({...form, DEVICE_CODE: e.target.value})} placeholder="e.g. GPS-2024-X99" />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                            <label className="text-xs font-medium text-neutral-400">IMEI</label>
+                            <input className="w-full rounded-xl bg-neutral-900 border border-white/10 px-3 py-2.5 text-white text-sm focus:border-indigo-500 outline-none transition font-mono" 
+                                value={form.DEVICE_IMEI} onChange={e => setForm({...form, DEVICE_IMEI: e.target.value})} placeholder="Optional" />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-xs font-medium text-neutral-400">Firmware</label>
+                            <input className="w-full rounded-xl bg-neutral-900 border border-white/10 px-3 py-2.5 text-white text-sm focus:border-indigo-500 outline-none transition" 
+                                value={form.FIRMWARE_VERSION} onChange={e => setForm({...form, FIRMWARE_VERSION: e.target.value})} placeholder="v1.0.0" />
+                        </div>
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-xs font-medium text-neutral-400">Assigned Branch (Optional)</label>
+                        <select className="w-full rounded-xl bg-neutral-900 border border-white/10 px-3 py-2.5 text-white text-sm focus:border-indigo-500 outline-none transition"
+                            value={form.BRANCH_ID} onChange={e => setForm({...form, BRANCH_ID: e.target.value})}
+                        >
+                            <option value="">Global / Unassigned</option>
+                            {branches.map(b => <option key={b.BRANCH_ID} value={b.BRANCH_ID}>{b.CITY} — {b.BRANCH_NAME}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-xs font-medium text-neutral-400">Status</label>
+                        <select className="w-full rounded-xl bg-neutral-900 border border-white/10 px-3 py-2.5 text-white text-sm focus:border-indigo-500 outline-none transition"
+                            value={form.STATUS} onChange={e => setForm({...form, STATUS: e.target.value})}
+                        >
+                            {["ACTIVE", "INACTIVE", "RETIRED"].map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="pt-4 flex gap-3">
+                         <button onClick={closeModal} className="flex-1 rounded-xl border border-white/10 bg-transparent py-2.5 text-sm font-bold text-white hover:bg-white/5 transition">Cancel</button>
+                         <button 
+                            onClick={saveDevice}
+                            disabled={saving || !form.DEVICE_CODE} 
+                            className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 shadow-lg shadow-indigo-600/20 transition disabled:opacity-50"
+                        >
+                            {saving ? "Saving..." : editMode ? "Update Device" : "Register Device"}
+                        </button>
+                    </div>
+                </div>
             </div>
-
-            <div className="mt-4 grid gap-3">
-              <input
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                placeholder="Device Code (required)"
-                value={form.DEVICE_CODE}
-                onChange={(e) => setForm({ ...form, DEVICE_CODE: e.target.value })}
-              />
-
-              <input
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                placeholder="IMEI (optional)"
-                value={form.DEVICE_IMEI}
-                onChange={(e) => setForm({ ...form, DEVICE_IMEI: e.target.value })}
-              />
-
-              <input
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                placeholder="Firmware version (optional)"
-                value={form.FIRMWARE_VERSION}
-                onChange={(e) => setForm({ ...form, FIRMWARE_VERSION: e.target.value })}
-              />
-
-              <select
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                value={form.STATUS}
-                onChange={(e) => setForm({ ...form, STATUS: e.target.value })}
-              >
-                {["ACTIVE", "INACTIVE", "RETIRED"].map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button className="h-10 rounded-xl bg-slate-800 px-4 text-slate-100" onClick={() => setCreateOpen(false)}>
-                  Cancel
-                </button>
-
-                <button
-                  className="h-10 rounded-xl bg-indigo-600 px-4 font-extrabold text-white disabled:opacity-60"
-                  onClick={createDevice}
-                  disabled={creating || !form.DEVICE_CODE.trim()}
-                >
-                  {creating ? "Saving..." : "Save"}
-                </button>
-              </div>
-
-              <div className="text-xs text-slate-500">
-                Supervisor only — managers can’t register devices.
-              </div>
-            </div>
-          </div>
         </div>
       )}
+
     </div>
   );
 }

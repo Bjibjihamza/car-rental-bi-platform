@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { Card } from "../components/Card";
+import { DataTable } from "../components/DataTable";
+import { Badge } from "../components/Badge";
+import { 
+  LayoutGrid, List, RefreshCw, Plus, X, 
+  Car as CarIcon, MapPin, Gauge, Search
+} from "lucide-react";
 
 /* ================= TYPES ================= */
-type DeviceOption = { DEVICE_ID: number; DEVICE_CODE: string; STATUS: string };
-
-type CarRow = {
+// Ideally, move these to src/types/fleet.ts
+export type CarRow = {
   CAR_ID: number;
   CATEGORY_ID: number;
   DEVICE_ID: number | null;
@@ -22,609 +28,433 @@ type CarRow = {
   BRANCH_CITY?: string | null;
 };
 
-type BranchRow = {
-  BRANCH_ID: number;
-  BRANCH_NAME: string;
-  CITY: string;
-};
-
-type DeviceRow = {
-  DEVICE_ID: number;
-  DEVICE_CODE: string;
-  DEVICE_IMEI?: string | null;
-  FIRMWARE_VERSION?: string | null;
-  STATUS: string;
-  ACTIVATED_AT?: string | null;
-  LAST_SEEN_AT?: string | null;
-  CREATED_AT: string;
-};
-
-/* ================= CONFIG ================= */
-const API_URL =
-  (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/$/, "") ||
-  "http://localhost:8000";
+type BranchRow = { BRANCH_ID: number; BRANCH_NAME: string; CITY: string; };
+type DeviceOption = { DEVICE_ID: number; DEVICE_CODE: string; };
 
 /* ================= HELPERS ================= */
-function fmtKm(n: number) {
-  return new Intl.NumberFormat().format(n) + " km";
+const API_URL = (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
+
+const CATEGORIES: Record<number, string> = { 1: "City", 2: "SUV", 3: "Luxury", 4: "Van", 5: "EV" };
+
+function fmtKm(n: number) { return new Intl.NumberFormat().format(n) + " km"; }
+function categoryLabel(id: number) { return CATEGORIES[id] || `#${id}`; }
+function badgeTone(status: string) {
+  const map: Record<string, "green" | "blue" | "amber" | "gray" | "purple" | "red"> = {
+    AVAILABLE: "green", RENTED: "blue", MAINTENANCE: "amber", RETIRED: "gray", RESERVED: "purple"
+  };
+  return map[status.toUpperCase()] || "red";
 }
 
-function fmtDate(iso: string) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(d);
+/* ================= SUB-COMPONENT: CAR DRAWER ================= */
+function CarDetailsDrawer({ car, onClose }: { car: CarRow | null, onClose: () => void }) {
+  if (!car) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
+      <div className="h-full w-full max-w-md border-l border-white/10 bg-[#09090b] shadow-2xl animate-in slide-in-from-right duration-300" onClick={(e) => e.stopPropagation()}>
+        <div className="border-b border-white/10 px-6 py-4 flex items-center justify-between bg-[#121212]">
+          <h2 className="text-lg font-bold text-white">Vehicle Details</h2>
+          <button onClick={onClose} className="rounded-lg p-2 hover:bg-white/10 text-neutral-400 hover:text-white"><X size={20}/></button>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* Car Image Header */}
+          <div className="relative rounded-xl overflow-hidden border border-white/10 shadow-lg bg-neutral-900">
+            {car.IMAGE_URL ? (
+              <img src={car.IMAGE_URL} className="w-full h-56 object-cover" alt={car.MODEL} />
+            ) : (
+              <div className="h-56 grid place-items-center text-neutral-500"><CarIcon size={48} /></div>
+            )}
+            <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 to-transparent p-4">
+              <h3 className="text-2xl font-bold text-white">{car.MAKE} {car.MODEL}</h3>
+              <div className="text-neutral-300 text-sm">{car.MODEL_YEAR} • {categoryLabel(car.CATEGORY_ID)}</div>
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+             <div className="flex-1 rounded-xl bg-white/5 p-3 border border-white/5 text-center">
+                <div className="text-xs text-neutral-500 uppercase tracking-wide">Status</div>
+                <div className="mt-1 flex justify-center"><Badge tone={badgeTone(car.STATUS)}>{car.STATUS}</Badge></div>
+             </div>
+             <div className="flex-1 rounded-xl bg-white/5 p-3 border border-white/5 text-center">
+                <div className="text-xs text-neutral-500 uppercase tracking-wide">Plate</div>
+                <div className="mt-1 font-mono text-white font-bold">{car.LICENSE_PLATE}</div>
+             </div>
+          </div>
+
+          {/* IoT Telemetry Section */}
+          <div className="rounded-xl bg-indigo-500/10 p-5 border border-indigo-500/20 relative overflow-hidden">
+            <div className="relative z-10">
+                <h4 className="text-sm font-bold text-indigo-300 mb-1 flex items-center gap-2"><Gauge size={14}/> IoT Telemetry</h4>
+                <p className="text-xs text-indigo-200/60 mb-3">Device ID: {car.DEVICE_ID ? `#${car.DEVICE_ID}` : "Not Linked"}</p>
+                {car.DEVICE_ID && (
+                  <div className="flex items-center gap-2 text-xs text-indigo-200">
+                    <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"/> Live signal active
+                  </div>
+                )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function categoryLabel(categoryId: number) {
-  switch (categoryId) {
-    case 1:
-      return "City";
-    case 2:
-      return "SUV";
-    case 3:
-      return "Luxury";
-    case 4:
-      return "Van";
-    case 5:
-      return "EV";
-    default:
-      return `#${categoryId}`;
-  }
-}
-
-function statusBadgeClass(status: string) {
-  const s = status.toUpperCase();
-  if (s === "AVAILABLE") return "bg-emerald-500/15 text-emerald-300 border-emerald-500/25";
-  if (s === "RENTED") return "bg-blue-500/15 text-blue-300 border-blue-500/25";
-  if (s === "MAINTENANCE") return "bg-amber-500/15 text-amber-300 border-amber-500/25";
-  if (s === "RETIRED") return "bg-slate-500/15 text-slate-300 border-slate-500/25";
-  if (s === "RESERVED") return "bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/25";
-  return "bg-red-500/15 text-red-300 border-red-500/25";
-}
-
-type SortKey =
-  | "CAR_ID"
-  | "MAKE"
-  | "MODEL"
-  | "MODEL_YEAR"
-  | "LICENSE_PLATE"
-  | "ODOMETER_KM"
-  | "STATUS"
-  | "CREATED_AT";
-
-/* ================= PAGE ================= */
-export function CarsPage() {
-  const { user, token } = useAuth();
-  const isSup = user?.role === "supervisor";
-
-  const [cars, setCars] = useState<CarRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-
-  // UI state
-  const [q, setQ] = useState("");
-  const [status, setStatus] = useState<string>("ALL");
-  const [category, setCategory] = useState<string>("ALL");
-  const [sortKey, setSortKey] = useState<SortKey>("CAR_ID");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-
-  const [selected, setSelected] = useState<CarRow | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-
-  // Create modal
-  const [createOpen, setCreateOpen] = useState(false);
+/* ================= SUB-COMPONENT: CREATE MODAL ================= */
+function CreateCarModal({ isOpen, onClose, onSuccess }: { isOpen: boolean, onClose: () => void, onSuccess: () => void }) {
+  const { token, user } = useAuth();
+  const [loading, setLoading] = useState(false);
+  
+  // Data Source State
   const [branches, setBranches] = useState<BranchRow[]>([]);
-  const [devices, setDevices] = useState<DeviceRow[]>([]);
-  const [creating, setCreating] = useState(false);
-const [freeDevices, setFreeDevices] = useState<DeviceOption[]>([]);
+  const [devices, setDevices] = useState<DeviceOption[]>([]);
+  const [categories, setCategories] = useState<{CATEGORY_ID: number, CATEGORY_NAME: string}[]>([]);
 
-
+  // Category "Quick Add" State
+  const [isAddingCat, setIsAddingCat] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [catLoading, setCatLoading] = useState(false);
+  
+  // Main Form State
   const [form, setForm] = useState({
-    CATEGORY_ID: 1,
-    DEVICE_ID: null as number | null,
-    VIN: "",
+    CATEGORY_ID: "", // Changed to string for select handling
+    BRANCH_ID: user?.branchId || "", // Default to user's branch if not supervisor
+    DEVICE_ID: "",
+    VIN: "", 
     LICENSE_PLATE: "",
-    MAKE: "",
-    MODEL: "",
+    MAKE: "", 
+    MODEL: "", 
     MODEL_YEAR: new Date().getFullYear(),
-    COLOR: "",
-    IMAGE_URL: "",
-    ODOMETER_KM: 0,
-    STATUS: "AVAILABLE",
-    BRANCH_ID: "" as any,
+    COLOR: "", 
+    IMAGE_URL: "", 
+    ODOMETER_KM: 0, 
+    STATUS: "AVAILABLE"
   });
 
-  
-  /* ================= FETCH ================= */
-async function fetchFreeDevices() {
-  if (!user || !isSup) return;
-  try {
-    const res = await fetch(`${API_URL}/api/v1/devices/available`, {
-      headers: {
-        Accept: "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    });
-    const data = await res.json().catch(() => []);
-    if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
-    setFreeDevices(Array.isArray(data) ? data : []);
-  } catch (e) {
-    console.error("fetchFreeDevices:", e);
-    setFreeDevices([]);
+  // Fetch Dropdown Data
+  useEffect(() => {
+    if (!isOpen) return;
+    const headers = { Accept: "application/json", Authorization: `Bearer ${token}` };
+    
+    Promise.all([
+      fetch(`${API_URL}/api/v1/branches`, { headers }).then(r => r.json()),
+      fetch(`${API_URL}/api/v1/devices/available`, { headers }).then(r => r.json()),
+      fetch(`${API_URL}/api/v1/categories`, { headers }).then(r => r.json())
+    ]).then(([bData, dData, cData]) => {
+      if(Array.isArray(bData)) setBranches(bData);
+      if(Array.isArray(dData)) setDevices(dData);
+      if(Array.isArray(cData)) setCategories(cData);
+    }).catch(console.error);
+  }, [isOpen, token]);
+
+  // Handle Quick Add Category
+  async function handleAddCategory() {
+    if(!newCatName.trim()) return;
+    setCatLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/v1/categories`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ CATEGORY_NAME: newCatName })
+      });
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed");
+
+      // Update list and auto-select the new one
+      setCategories(prev => [...prev, data]);
+      setForm(prev => ({ ...prev, CATEGORY_ID: String(data.CATEGORY_ID) }));
+      setIsAddingCat(false);
+      setNewCatName("");
+    } catch (e) {
+      alert("Error adding category");
+    } finally {
+      setCatLoading(false);
+    }
   }
-}
 
-
-  async function fetchCars() {
-    if (!user) return;
+  async function handleSubmit() {
+    // Validation
+    if (!form.CATEGORY_ID || !form.BRANCH_ID || !form.VIN || !form.MAKE) {
+        alert("Please fill in all required fields (Category, Branch, VIN, Make)");
+        return;
+    }
 
     setLoading(true);
-    setErr(null);
-
-    try {
-      const qs = isSup ? "" : `?branchId=${user.branchId}`;
-      const url = `${API_URL}/api/v1/cars${qs}`;
-
-      const res = await fetch(url, {
-        headers: {
-          Accept: "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-
-      const data = await res.json().catch(() => []);
-      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
-
-      setCars(Array.isArray(data) ? data : []);
-    } catch (e: any) {
-      setErr(e?.message || "Failed to load cars");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function fetchBranches() {
-    if (!user || !isSup) return;
-
-    try {
-      const res = await fetch(`${API_URL}/api/v1/branches`, {
-        headers: {
-          Accept: "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-
-      const data = await res.json().catch(() => []);
-      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
-
-      setBranches(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("fetchBranches:", e);
-    }
-  }
-
-  // ✅ only available devices (not linked to a car)
-  async function fetchAvailableDevices() {
-    if (!user || !isSup) return;
-
-    try {
-      const res = await fetch(`${API_URL}/api/v1/devices/available`, {
-        headers: {
-          Accept: "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-
-      const data = await res.json().catch(() => []);
-      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
-
-      setDevices(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("fetchAvailableDevices:", e);
-    }
-  }
-
-  async function createCar() {
-    if (!user || !isSup) return;
-
-    setCreating(true);
     try {
       const payload = {
         ...form,
+        CATEGORY_ID: Number(form.CATEGORY_ID),
         BRANCH_ID: Number(form.BRANCH_ID),
         DEVICE_ID: form.DEVICE_ID ? Number(form.DEVICE_ID) : null,
-        IMAGE_URL: form.IMAGE_URL?.trim() ? form.IMAGE_URL.trim() : null,
+        IMAGE_URL: form.IMAGE_URL.trim() || null,
       };
 
       const res = await fetch(`${API_URL}/api/v1/cars`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload),
       });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
-
-      setCreateOpen(false);
-      setForm({
-        CATEGORY_ID: 1,
-        DEVICE_ID: null,
-        VIN: "",
-        LICENSE_PLATE: "",
-        MAKE: "",
-        MODEL: "",
-        MODEL_YEAR: new Date().getFullYear(),
-        COLOR: "",
-        IMAGE_URL: "",
-        ODOMETER_KM: 0,
-        STATUS: "AVAILABLE",
-        BRANCH_ID: "" as any,
-      });
-
-      await fetchCars();
-    } catch (e: any) {
-      alert(e?.message || "Failed to create car");
-    } finally {
-      setCreating(false);
-    }
+      
+      if (!res.ok) throw new Error("Failed to create");
+      onSuccess();
+      onClose();
+    } catch (e) { alert("Error creating car"); } 
+    finally { setLoading(false); }
   }
 
-  useEffect(() => {
-    fetchCars();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.role, user?.branchId]);
+  if (!isOpen) return null;
 
-  // ✅ load branches + available devices when opening modal
-  useEffect(() => {
-      if (createOpen) fetchFreeDevices();
+  const InputClass = "w-full rounded-xl bg-neutral-900 border border-white/10 px-3 py-2.5 text-white text-sm focus:border-indigo-500 outline-none transition";
+  const LabelClass = "text-xs text-neutral-400 font-medium ml-1";
 
-    if (createOpen && isSup) {
-      fetchBranches();
-      fetchAvailableDevices();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [createOpen]);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm px-4">
+      <div className="w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-[#121212] shadow-2xl animate-in zoom-in-95 duration-200">
+        
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-white/10 px-6 py-4 bg-[#18181b]">
+          <h3 className="text-lg font-bold text-white flex items-center gap-2">
+            <CarIcon className="text-indigo-500" size={20}/> Add New Vehicle
+          </h3>
+          <button onClick={onClose} className="text-neutral-400 hover:text-white"><X size={20}/></button>
+        </div>
 
-  /* ================= FILTERING ================= */
-  const statusOptions = useMemo(
-    () => Array.from(new Set(cars.map((c) => c.STATUS.toUpperCase()))),
-    [cars]
+        {/* Scrollable Form Body */}
+        <div className="p-6 max-h-[75vh] overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-5">
+            
+            {/* --- SECTION: ASSIGNMENT --- */}
+            <div className="col-span-1 md:col-span-2 text-xs font-bold text-indigo-400 uppercase tracking-wider mb-[-10px]">Assignments</div>
+
+            <div className="space-y-1">
+               <label className={LabelClass}>Branch <span className="text-red-500">*</span></label>
+               <select className={InputClass} value={form.BRANCH_ID} onChange={e => setForm({...form, BRANCH_ID: e.target.value})}>
+                 <option value="">-- Select Branch --</option>
+                 {branches.map(b => (
+                   <option key={b.BRANCH_ID} value={b.BRANCH_ID}>{b.CITY} - {b.BRANCH_NAME}</option>
+                 ))}
+               </select>
+            </div>
+
+            <div className="space-y-1">
+               <label className={LabelClass}>Category <span className="text-red-500">*</span></label>
+               {isAddingCat ? (
+                 <div className="flex gap-2">
+                    <input 
+                      className={InputClass} 
+                      placeholder="New Category Name..." 
+                      autoFocus
+                      value={newCatName} 
+                      onChange={e => setNewCatName(e.target.value)}
+                    />
+                    <button onClick={handleAddCategory} disabled={catLoading} className="px-3 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 font-bold text-xs">
+                        {catLoading ? "..." : "SAVE"}
+                    </button>
+                    <button onClick={() => setIsAddingCat(false)} className="px-3 rounded-lg bg-neutral-700 text-white hover:bg-neutral-600 text-xs">X</button>
+                 </div>
+               ) : (
+                 <div className="flex gap-2">
+                   <select className={InputClass} value={form.CATEGORY_ID} onChange={e => setForm({...form, CATEGORY_ID: e.target.value})}>
+                     <option value="">-- Select Category --</option>
+                     {categories.map(c => (
+                       <option key={c.CATEGORY_ID} value={c.CATEGORY_ID}>{c.CATEGORY_NAME}</option>
+                     ))}
+                   </select>
+                   <button 
+                    onClick={() => setIsAddingCat(true)}
+                    title="Add New Category"
+                    className="aspect-square h-[42px] flex items-center justify-center rounded-xl border border-white/10 bg-white/5 text-neutral-400 hover:bg-indigo-600 hover:text-white hover:border-indigo-500 transition"
+                   >
+                     <Plus size={18} />
+                   </button>
+                 </div>
+               )}
+            </div>
+
+            {/* --- SECTION: VEHICLE SPECS --- */}
+            <div className="col-span-1 md:col-span-2 text-xs font-bold text-indigo-400 uppercase tracking-wider mt-2 mb-[-10px]">Details</div>
+
+            <div className="space-y-1">
+               <label className={LabelClass}>Make</label>
+               <input className={InputClass} value={form.MAKE} onChange={e => setForm({...form, MAKE: e.target.value})} placeholder="e.g. Toyota" />
+            </div>
+            <div className="space-y-1">
+               <label className={LabelClass}>Model</label>
+               <input className={InputClass} value={form.MODEL} onChange={e => setForm({...form, MODEL: e.target.value})} placeholder="e.g. Camry" />
+            </div>
+            
+            <div className="space-y-1">
+               <label className={LabelClass}>VIN (Chassis No.)</label>
+               <input className={InputClass} value={form.VIN} onChange={e => setForm({...form, VIN: e.target.value})} placeholder="17 chars" />
+            </div>
+            <div className="space-y-1">
+               <label className={LabelClass}>License Plate</label>
+               <input className={InputClass} value={form.LICENSE_PLATE} onChange={e => setForm({...form, LICENSE_PLATE: e.target.value})} placeholder="1234-A-1" />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                    <label className={LabelClass}>Year</label>
+                    <input type="number" className={InputClass} value={form.MODEL_YEAR} onChange={e => setForm({...form, MODEL_YEAR: Number(e.target.value)})} />
+                </div>
+                <div className="space-y-1">
+                    <label className={LabelClass}>Color</label>
+                    <input className={InputClass} value={form.COLOR} onChange={e => setForm({...form, COLOR: e.target.value})} placeholder="Silver" />
+                </div>
+            </div>
+            
+            <div className="space-y-1">
+               <label className={LabelClass}>Odometer (KM)</label>
+               <input type="number" className={InputClass} value={form.ODOMETER_KM} onChange={e => setForm({...form, ODOMETER_KM: Number(e.target.value)})} />
+            </div>
+
+            {/* --- SECTION: IoT & IMAGE --- */}
+            <div className="col-span-1 md:col-span-2 text-xs font-bold text-indigo-400 uppercase tracking-wider mt-2 mb-[-10px]">Tech & Media</div>
+
+            <div className="space-y-1">
+               <label className={LabelClass}>Link IoT Device</label>
+               <select className={InputClass} value={form.DEVICE_ID} onChange={e => setForm({...form, DEVICE_ID: e.target.value})}>
+                 <option value="">No Device</option>
+                 {devices.map(d => (
+                   <option key={d.DEVICE_ID} value={d.DEVICE_ID}>{d.DEVICE_CODE}</option>
+                 ))}
+               </select>
+            </div>
+
+            <div className="space-y-1">
+               <label className={LabelClass}>Image URL</label>
+               <input className={InputClass} value={form.IMAGE_URL} onChange={e => setForm({...form, IMAGE_URL: e.target.value})} placeholder="https://..." />
+            </div>
+        </div>
+
+        {/* Footer Actions */}
+        <div className="border-t border-white/10 p-6 bg-[#18181b] flex gap-3">
+            <button onClick={onClose} className="flex-1 rounded-xl border border-white/10 py-3 text-sm font-bold text-white hover:bg-white/5 transition">Cancel</button>
+            <button onClick={handleSubmit} disabled={loading} className="flex-1 rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white hover:bg-indigo-500 disabled:opacity-50 transition shadow-lg shadow-indigo-500/20">
+              {loading ? "Saving..." : "Save Vehicle"}
+            </button>
+        </div>
+
+      </div>
+    </div>
   );
+}
 
-  const categoryOptions = useMemo(
-    () => Array.from(new Set(cars.map((c) => c.CATEGORY_ID))),
-    [cars]
-  );
+/* ================= MAIN PAGE COMPONENT ================= */
+export function CarsPage() {
+  const { user, token } = useAuth();
+  const isSup = user?.role === "supervisor";
+
+  // Data & UI State
+  const [cars, setCars] = useState<CarRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState("ALL");
+  const [category, setCategory] = useState("ALL");
+  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+  
+  // Modals
+  const [selectedCar, setSelectedCar] = useState<CarRow | null>(null);
+  const [isCreateOpen, setCreateOpen] = useState(false);
+
+  const fetchCars = async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const qs = isSup ? "" : `?branchId=${user.branchId}`;
+      const res = await fetch(`${API_URL}/api/v1/cars${qs}`, {
+        headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      setCars(Array.isArray(data) ? data : []);
+    } catch (e) { console.error("Fetch error", e); } 
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchCars(); }, [user?.role, user?.branchId]);
 
   const filtered = useMemo(() => {
-    let base = cars.slice();
-    const qq = q.trim().toLowerCase();
-
-    if (status !== "ALL") base = base.filter((c) => c.STATUS === status);
-    if (category !== "ALL") base = base.filter((c) => String(c.CATEGORY_ID) === category);
-
-    if (qq) {
-      base = base.filter((c) =>
-        [c.MAKE, c.MODEL, c.VIN, c.LICENSE_PLATE, c.STATUS, categoryLabel(c.CATEGORY_ID)]
-          .join(" ")
-          .toLowerCase()
-          .includes(qq)
-      );
-    }
-
-    base.sort((a, b) => {
-      const dir = sortDir === "asc" ? 1 : -1;
-      const av: any = (a as any)[sortKey];
-      const bv: any = (b as any)[sortKey];
-      return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
+    return cars.filter(c => {
+        const matchesQ = [c.MAKE, c.MODEL, c.VIN, c.LICENSE_PLATE].join(" ").toLowerCase().includes(q.toLowerCase());
+        const matchesStatus = status === "ALL" || c.STATUS === status;
+        const matchesCat = category === "ALL" || String(c.CATEGORY_ID) === category;
+        return matchesQ && matchesStatus && matchesCat;
     });
+  }, [cars, q, status, category]);
 
-    return base;
-  }, [cars, q, status, category, sortKey, sortDir]);
+  /* --- RENDER HELPERS --- */
+  const HeaderControls = (
+    <div className="flex flex-wrap items-center gap-3">
+       <input 
+         className="h-9 w-48 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white focus:w-64 transition-all"
+         placeholder="Search..." value={q} onChange={e => setQ(e.target.value)} 
+       />
+       <select className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white bg-[#18181b]" value={category} onChange={e => setCategory(e.target.value)}>
+          <option value="ALL">All Categories</option>
+          {[1,2,3,4,5].map(id => <option key={id} value={String(id)}>{categoryLabel(id)}</option>)}
+       </select>
+       
+       <div className="flex h-9 items-center rounded-lg border border-white/10 bg-white/5 p-1">
+          <button onClick={() => setViewMode("cards")} className={`px-2 rounded ${viewMode === 'cards' ? 'bg-indigo-600 text-white' : 'text-neutral-400'}`}><LayoutGrid size={16}/></button>
+          <button onClick={() => setViewMode("table")} className={`px-2 rounded ${viewMode === 'table' ? 'bg-indigo-600 text-white' : 'text-neutral-400'}`}><List size={16}/></button>
+       </div>
+       
+       <button onClick={fetchCars} className="h-9 w-9 grid place-items-center rounded-lg border border-white/10 bg-white/5 text-neutral-400 hover:text-white"><RefreshCw size={16}/></button>
+       
+       {isSup && (
+         <button onClick={() => setCreateOpen(true)} className="flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white hover:bg-emerald-500">
+            <Plus size={16} /> Add Car
+         </button>
+       )}
+    </div>
+  );
 
-  /* ================= UI ================= */
   return (
-    <div className="grid gap-4">
-      <div className="rounded-2xl border border-slate-700/40 bg-slate-900/60 p-4">
-        <div className="flex flex-wrap items-center gap-3 justify-between">
-          <div>
-            <div className="text-lg font-extrabold text-slate-100">
-              {isSup ? "Cars — All Branches" : "Cars — My Branch"}
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <Card title={isSup ? "Global Fleet" : "Branch Fleet"} subtitle={`${filtered.length} vehicles`} right={HeaderControls} className="min-h-[600px]">
+        
+        {loading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
+                {[1,2,3].map(i => <div key={i} className="h-64 rounded-2xl bg-white/5 animate-pulse" />)}
             </div>
-            <div className="text-xs text-slate-400">
-              {loading ? "Loading…" : `${filtered.length} cars`}
-            </div>
+        ) : filtered.length === 0 ? (
+            <div className="py-20 text-center text-neutral-500"><Search className="mx-auto mb-3" /> No vehicles found.</div>
+        ) : viewMode === "table" ? (
+          <DataTable 
+             rows={filtered}
+             cols={[
+                { key: "MAKE", header: "Vehicle", render: r => <span className="text-white font-medium">{r.MAKE} {r.MODEL}</span> },
+                { key: "LICENSE_PLATE", header: "Plate", render: r => <code className="bg-white/10 px-1 rounded">{r.LICENSE_PLATE}</code> },
+                { key: "STATUS", header: "Status", render: r => <Badge tone={badgeTone(r.STATUS)}>{r.STATUS}</Badge> },
+                { key: "ODOMETER_KM", header: "Mileage", render: r => fmtKm(r.ODOMETER_KM) },
+                { key: "actions", header: "", render: r => <button onClick={() => setSelectedCar(r)} className="text-indigo-400 hover:underline">Details</button> }
+             ]}
+          />
+        ) : (
+          <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+             {filtered.map(c => (
+                <div key={c.CAR_ID} className="group relative overflow-hidden rounded-2xl border border-white/5 bg-[#18181b] hover:border-indigo-500/30 transition-all">
+                   <div className="h-48 bg-[#09090b] relative">
+                      {c.IMAGE_URL ? <img src={c.IMAGE_URL} className="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition" /> : <div className="grid place-items-center h-full text-neutral-600"><CarIcon size={48}/></div>}
+                      <div className="absolute top-3 left-3"><Badge tone={badgeTone(c.STATUS)}>{c.STATUS}</Badge></div>
+                   </div>
+                   <div className="p-5">
+                      <h4 className="text-lg font-bold text-white">{c.MAKE} {c.MODEL}</h4>
+                      <div className="mt-4 flex gap-2 text-xs">
+                          <div className="bg-white/5 p-2 rounded flex-1 flex items-center gap-2 text-neutral-400"><Gauge size={12}/> {fmtKm(c.ODOMETER_KM)}</div>
+                          <div className="bg-white/5 p-2 rounded flex-1 flex items-center gap-2 text-neutral-400"><MapPin size={12}/> {c.BRANCH_CITY || "N/A"}</div>
+                      </div>
+                      <button onClick={() => setSelectedCar(c)} className="mt-4 w-full rounded-xl bg-white/5 py-2 text-sm font-medium text-neutral-300 hover:bg-white/10">View Details</button>
+                   </div>
+                </div>
+             ))}
           </div>
+        )}
+      </Card>
 
-          <div className="flex flex-wrap gap-2">
-            <input
-              className="h-10 w-[240px] rounded-xl border border-slate-700/50 bg-slate-950/40 px-3 text-sm text-slate-100"
-              placeholder="Search…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-
-            <select
-              className="h-10 rounded-xl border border-slate-700/50 bg-slate-950/40 px-3 text-sm text-slate-100"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            >
-              <option value="ALL">All categories</option>
-              {categoryOptions.map((id) => (
-                <option key={id} value={String(id)}>
-                  {categoryLabel(id)}
-                </option>
-              ))}
-            </select>
-
-            <select
-              className="h-10 rounded-xl border border-slate-700/50 bg-slate-950/40 px-3 text-sm text-slate-100"
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-            >
-              <option value="ALL">All statuses</option>
-              {statusOptions.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-
-            <button
-              className="h-10 rounded-xl border border-indigo-400/60 bg-indigo-500/20 px-3 text-sm text-slate-100"
-              onClick={fetchCars}
-            >
-              Refresh
-            </button>
-
-            {isSup && (
-              <button
-                className="h-10 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 px-3 text-sm font-extrabold text-white"
-                onClick={() => setCreateOpen(true)}
-              >
-                + Add Car
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {err && (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
-          {err}
-        </div>
-      )}
-
-      {/* TABLE */}
-      <div className="overflow-auto rounded-2xl border border-slate-700/30 bg-slate-900/60">
-        <table className="min-w-[900px] w-full">
-          <thead>
-            <tr className="text-xs text-slate-400">
-              {["ID", "Make", "Model", "Year", "Plate", "Category", "Status", "Odometer", "Created"].map(
-                (h) => (
-                  <th key={h} className="px-3 py-3 text-left">
-                    {h}
-                  </th>
-                )
-              )}
-              <th />
-            </tr>
-          </thead>
-
-          <tbody>
-            {!loading &&
-              filtered.map((c) => (
-                <tr key={c.CAR_ID} className="border-t border-slate-700/20 hover:bg-slate-700/10">
-                  <td className="px-3 py-3 font-mono text-slate-100">#{c.CAR_ID}</td>
-                  <td className="px-3 py-3 text-slate-100">{c.MAKE}</td>
-                  <td className="px-3 py-3 text-slate-100">{c.MODEL}</td>
-                  <td className="px-3 py-3 text-slate-300">{c.MODEL_YEAR}</td>
-                  <td className="px-3 py-3 font-mono text-slate-100">{c.LICENSE_PLATE}</td>
-                  <td className="px-3 py-3 text-slate-100">{categoryLabel(c.CATEGORY_ID)}</td>
-                  <td className="px-3 py-3">
-                    <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${statusBadgeClass(c.STATUS)}`}>
-                      {c.STATUS}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3 text-slate-100">{fmtKm(c.ODOMETER_KM)}</td>
-                  <td className="px-3 py-3 text-slate-400">{fmtDate(c.CREATED_AT)}</td>
-                  <td className="px-3 py-3">
-                    <button
-                      className="rounded-xl bg-slate-700/30 px-3 py-2 text-xs text-slate-100"
-                      onClick={() => {
-                        setSelected(c);
-                        setDrawerOpen(true);
-                      }}
-                    >
-                      Details
-                    </button>
-                  </td>
-                </tr>
-              ))}
-
-            {!loading && filtered.length === 0 && (
-              <tr>
-                <td colSpan={10} className="px-4 py-6 text-center text-slate-400">
-                  No cars found
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* DETAILS DRAWER */}
-      {drawerOpen && selected && (
-        <div className="fixed inset-0 z-40 bg-black/50 flex justify-end">
-          <div className="w-[420px] bg-slate-950 p-4">
-            <div className="flex justify-between items-center">
-              <div className="font-extrabold text-slate-100">
-                {selected.MAKE} {selected.MODEL}
-              </div>
-              <button className="text-slate-400 hover:text-slate-100" onClick={() => setDrawerOpen(false)}>
-                ✕
-              </button>
-            </div>
-
-            <pre className="mt-4 text-xs text-slate-300">{JSON.stringify(selected, null, 2)}</pre>
-          </div>
-        </div>
-      )}
-
-      {/* CREATE MODAL */}
-      {createOpen && isSup && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex justify-end">
-          <div className="w-[520px] bg-slate-950 p-5 overflow-auto">
-            <div className="flex items-center justify-between">
-              <div className="text-lg font-extrabold text-slate-100">Add Car</div>
-              <button className="text-slate-400 hover:text-slate-100" onClick={() => setCreateOpen(false)}>
-                ✕
-              </button>
-            </div>
-
-            <div className="mt-4 grid gap-3">
-              {/* ✅ DEVICE SELECT (AVAILABLE ONLY) */}
-              <select
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                value={form.DEVICE_ID === null ? "" : String(form.DEVICE_ID)}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    DEVICE_ID: e.target.value ? Number(e.target.value) : null,
-                  })
-                }
-              >
-                <option value="">No device (optional)</option>
-                {devices.map((d) => (
-                  <option key={d.DEVICE_ID} value={String(d.DEVICE_ID)}>
-                    #{d.DEVICE_ID} — {d.DEVICE_CODE}
-                    {d.DEVICE_IMEI ? ` (IMEI: ${d.DEVICE_IMEI})` : ""}
-                    {d.STATUS ? ` — ${d.STATUS}` : ""}
-                  </option>
-                ))}
-              </select>
-
-              <input
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                placeholder="VIN"
-                value={form.VIN}
-                onChange={(e) => setForm({ ...form, VIN: e.target.value })}
-              />
-              <input
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                placeholder="License Plate"
-                value={form.LICENSE_PLATE}
-                onChange={(e) => setForm({ ...form, LICENSE_PLATE: e.target.value })}
-              />
-              <input
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                placeholder="Make"
-                value={form.MAKE}
-                onChange={(e) => setForm({ ...form, MAKE: e.target.value })}
-              />
-              <input
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                placeholder="Model"
-                value={form.MODEL}
-                onChange={(e) => setForm({ ...form, MODEL: e.target.value })}
-              />
-
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                  placeholder="Model Year"
-                  type="number"
-                  value={form.MODEL_YEAR}
-                  onChange={(e) => setForm({ ...form, MODEL_YEAR: Number(e.target.value) })}
-                />
-                <input
-                  className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                  placeholder="Color"
-                  value={form.COLOR}
-                  onChange={(e) => setForm({ ...form, COLOR: e.target.value })}
-                />
-              </div>
-
-              <input
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                placeholder="Image URL (https://...)"
-                value={form.IMAGE_URL}
-                onChange={(e) => setForm({ ...form, IMAGE_URL: e.target.value })}
-              />
-
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                  placeholder="Odometer KM"
-                  type="number"
-                  value={form.ODOMETER_KM}
-                  onChange={(e) => setForm({ ...form, ODOMETER_KM: Number(e.target.value) })}
-                />
-
-                <select
-                  className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                  value={form.STATUS}
-                  onChange={(e) => setForm({ ...form, STATUS: e.target.value })}
-                >
-                  {["AVAILABLE", "RESERVED", "RENTED", "MAINTENANCE", "RETIRED"].map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <select
-                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
-                value={form.BRANCH_ID}
-                onChange={(e) => setForm({ ...form, BRANCH_ID: e.target.value })}
-              >
-                <option value="">Select branch...</option>
-                {branches.map((b) => (
-                  <option key={b.BRANCH_ID} value={String(b.BRANCH_ID)}>
-                    {b.CITY} — {b.BRANCH_NAME}
-                  </option>
-                ))}
-              </select>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  className="h-10 rounded-xl bg-slate-800 px-4 text-slate-100"
-                  onClick={() => setCreateOpen(false)}
-                >
-                  Cancel
-                </button>
-
-                <button
-                  className="h-10 rounded-xl bg-indigo-600 px-4 font-extrabold text-white disabled:opacity-60"
-                  onClick={createCar}
-                  disabled={
-                    creating ||
-                    !form.VIN.trim() ||
-                    !form.LICENSE_PLATE.trim() ||
-                    !form.MAKE.trim() ||
-                    !form.MODEL.trim() ||
-                    !form.BRANCH_ID
-                  }
-                >
-                  {creating ? "Saving..." : "Save"}
-                </button>
-              </div>
-
-              <div className="text-xs text-slate-500">
-                Supervisor only — managers can’t create cars.
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Render Sub-Components */}
+      <CarDetailsDrawer car={selectedCar} onClose={() => setSelectedCar(null)} />
+      <CreateCarModal isOpen={isCreateOpen} onClose={() => setCreateOpen(false)} onSuccess={fetchCars} />
     </div>
   );
 }

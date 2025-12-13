@@ -1,7 +1,6 @@
-// src/frontend/src/pages/LoginPage.tsx
 import React, { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Shield, Loader2, Eye, EyeOff } from "lucide-react";
+import { Shield, Loader2, Eye, EyeOff, Lock, Mail } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 
 export function LoginPage() {
@@ -11,8 +10,8 @@ export function LoginPage() {
 
   const from = (location.state as any)?.from || "/dashboard";
 
-  const [email, setEmail] = useState("");       // ✅ start empty (or set supervisor email for dev)
-  const [password, setPassword] = useState(""); // ✅ start empty
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
 
   const [loading, setLoading] = useState(false);
@@ -36,76 +35,90 @@ export function LoginPage() {
   const disabled = loading || !email.trim() || !password;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
-      <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white shadow-xl p-8">
-        <div className="flex items-center gap-2 font-extrabold text-slate-900 mb-2">
-          <Shield size={18} /> Sign In
-        </div>
-        <div className="text-sm text-slate-600 mb-6">
-          Connect as <span className="font-semibold">Supervisor</span> or{" "}
-          <span className="font-semibold">Manager</span>.
-        </div>
+    <div className="relative min-h-screen flex items-center justify-center bg-[#09090b] p-6 overflow-hidden selection:bg-indigo-500/30">
+      
+      {/* Ambient Background Effects */}
+      <div className="absolute top-[-10%] left-[-10%] h-[500px] w-[500px] rounded-full bg-indigo-600/20 blur-[120px]" />
+      <div className="absolute bottom-[-10%] right-[-10%] h-[500px] w-[500px] rounded-full bg-violet-600/10 blur-[120px]" />
 
-        <form onSubmit={onSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Email</label>
-            <input
-              type="email"
-              autoComplete="email"
-              className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-sky-200"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="name@carrental.local"
-            />
+      <div className="relative w-full max-w-md">
+        {/* Glass Card */}
+        <div className="rounded-[32px] border border-white/10 bg-[#121212]/60 backdrop-blur-xl shadow-2xl p-8 sm:p-10">
+          
+          <div className="mb-8 text-center">
+            <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/20">
+              <Shield className="h-7 w-7 text-white" fill="currentColor" fillOpacity={0.2} />
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight text-white">Welcome back</h1>
+            <p className="mt-2 text-sm text-neutral-400">
+              Enter your credentials to access the <br /> 
+              <span className="text-indigo-400 font-medium">Fleet Command Center</span>.
+            </p>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Password</label>
-            <div className="relative">
-              <input
-                type={showPwd ? "text" : "password"}
-                autoComplete="current-password"
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 pr-12 outline-none focus:ring-2 focus:ring-sky-200"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPwd((s) => !s)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700"
-                aria-label={showPwd ? "Hide password" : "Show password"}
-              >
-                {showPwd ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+          <form onSubmit={onSubmit} className="space-y-5">
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider text-neutral-500 ml-1">Email Address</label>
+              <div className="relative group">
+                <Mail className="absolute left-4 top-3.5 h-5 w-5 text-neutral-500 group-focus-within:text-white transition-colors" />
+                <input
+                  type="email"
+                  autoComplete="email"
+                  className="w-full rounded-2xl border border-white/10 bg-[#18181b] py-3 pl-12 pr-4 text-sm text-white placeholder-neutral-600 focus:border-indigo-500 focus:bg-[#18181b] focus:ring-1 focus:ring-indigo-500 outline-none transition-all"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="manager@fleet.local"
+                />
+              </div>
             </div>
-          </div>
 
-          {error && (
-            <div className="rounded-2xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-              {error}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider text-neutral-500 ml-1">Password</label>
+              <div className="relative group">
+                <Lock className="absolute left-4 top-3.5 h-5 w-5 text-neutral-500 group-focus-within:text-white transition-colors" />
+                <input
+                  type={showPwd ? "text" : "password"}
+                  autoComplete="current-password"
+                  className="w-full rounded-2xl border border-white/10 bg-[#18181b] py-3 pl-12 pr-12 text-sm text-white placeholder-neutral-600 focus:border-indigo-500 focus:bg-[#18181b] focus:ring-1 focus:ring-indigo-500 outline-none transition-all"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPwd((s) => !s)}
+                  className="absolute right-4 top-3.5 text-neutral-500 hover:text-white transition-colors"
+                >
+                  {showPwd ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
-          )}
 
-          <button
-            type="submit"
-            disabled={disabled}
-            className="w-full rounded-2xl bg-sky-500 text-white font-extrabold py-3 flex items-center justify-center gap-2 disabled:opacity-60"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="animate-spin" size={18} />
-                Signing in...
-              </>
-            ) : (
-              "Sign in"
+            {error && (
+              <div className="rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-200 flex items-center gap-2 animate-in fade-in slide-in-from-top-1">
+                <div className="h-1.5 w-1.5 rounded-full bg-red-400" />
+                {error}
+              </div>
             )}
-          </button>
 
-          <div className="text-xs text-slate-500 pt-2">
-            Tip: Use the same login page for both roles — the API returns your role in the JWT.
+            <button
+              type="submit"
+              disabled={disabled}
+              className="group relative w-full overflow-hidden rounded-2xl bg-indigo-600 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-600/20 transition-all hover:bg-indigo-500 hover:shadow-indigo-600/40 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <div className="flex items-center justify-center gap-2">
+                {loading && <Loader2 className="animate-spin" size={18} />}
+                <span>{loading ? "Authenticating..." : "Sign In"}</span>
+              </div>
+            </button>
+          </form>
+
+          <div className="mt-8 border-t border-white/5 pt-6 text-center">
+            <p className="text-xs text-neutral-600">
+              Restricted access. Authorized personnel only.
+            </p>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   );

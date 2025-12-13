@@ -1,135 +1,99 @@
-// src/api/src/routes/cars.js
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const { getConnection } = require("../db");
-const { authMiddleware } = require("../authMiddleware");
+const { getConnection } = require('../db');
+const oracledb = require('oracledb');
 
-function isSupervisorUser(user) {
-  return String(user?.role || "").toLowerCase() === "supervisor";
-}
-
-router.get("/", authMiddleware, async (req, res) => {
-  const user = req.user;
-  const isSupervisor = isSupervisorUser(user);
-
+// GET /api/v1/cars
+router.get('/', async (req, res) => {
   let conn;
   try {
     conn = await getConnection();
-
-    const binds = {};
+    const { branchId } = req.query;
+    
     let sql = `
-      SELECT
-        c.CAR_ID,
-        c.CATEGORY_ID,
-        c.DEVICE_ID,
-        c.VIN,
-        c.LICENSE_PLATE,
-        c.MAKE,
-        c.MODEL,
-        c.MODEL_YEAR,
-        c.COLOR,
-        c.IMAGE_URL,
-        c.ODOMETER_KM,
-        c.STATUS,
-        c.BRANCH_ID,
-        c.CREATED_AT,
-        b.CITY AS BRANCH_CITY
+      SELECT c.*, b.CITY as BRANCH_CITY 
       FROM CARS c
-      LEFT JOIN BRANCHES b ON b.BRANCH_ID = c.BRANCH_ID
+      LEFT JOIN BRANCHES b ON c.BRANCH_ID = b.BRANCH_ID
     `;
-
-    if (!isSupervisor) {
-      sql += ` WHERE c.BRANCH_ID = :branchId `;
-      binds.branchId = user.branchId;
+    const binds = {};
+    
+    if (branchId) {
+      sql += ` WHERE c.BRANCH_ID = :branchId`;
+      binds.branchId = branchId;
     }
-
-    sql += ` ORDER BY c.CAR_ID DESC`;
-
+    
+    sql += ` ORDER BY c.CREATED_AT DESC`;
+    
     const r = await conn.execute(sql, binds);
     res.json(r.rows || []);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: "Failed to fetch cars" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server Error" });
   } finally {
     try { if (conn) await conn.close(); } catch {}
   }
 });
 
-/**
- * POST /api/v1/cars
- * Supervisor only
- * Body: { CATEGORY_ID, DEVICE_ID?, VIN, LICENSE_PLATE, MAKE, MODEL, MODEL_YEAR, COLOR, IMAGE_URL?, ODOMETER_KM, STATUS, BRANCH_ID }
- */
-router.post("/", authMiddleware, async (req, res) => {
-  const user = req.user;
-  const isSupervisor = isSupervisorUser(user);
-  if (!isSupervisor) return res.status(403).json({ message: "Supervisor only" });
-
-  const b = req.body || {};
-
-  // basic validations
-  const required = ["CATEGORY_ID", "VIN", "LICENSE_PLATE", "MAKE", "MODEL", "BRANCH_ID"];
-  for (const k of required) {
-    if (b[k] === undefined || b[k] === null || String(b[k]).trim() === "") {
-      return res.status(400).json({ message: `Missing field: ${k}` });
-    }
-  }
-
-  const payload = {
-    CATEGORY_ID: Number(b.CATEGORY_ID),
-    DEVICE_ID: b.DEVICE_ID === null || b.DEVICE_ID === "" ? null : Number(b.DEVICE_ID),
-    VIN: String(b.VIN).trim(),
-    LICENSE_PLATE: String(b.LICENSE_PLATE).trim(),
-    MAKE: String(b.MAKE).trim(),
-    MODEL: String(b.MODEL).trim(),
-    MODEL_YEAR: b.MODEL_YEAR ? Number(b.MODEL_YEAR) : null,
-    COLOR: b.COLOR ? String(b.COLOR).trim() : null,
-    IMAGE_URL: b.IMAGE_URL ? String(b.IMAGE_URL).trim() : null,
-    ODOMETER_KM: b.ODOMETER_KM ? Number(b.ODOMETER_KM) : 0,
-    STATUS: b.STATUS ? String(b.STATUS).trim().toUpperCase() : "AVAILABLE",
-    BRANCH_ID: Number(b.BRANCH_ID),
-  };
-
+// POST /api/v1/cars
+router.post('/', async (req, res) => {
   let conn;
   try {
     conn = await getConnection();
+    const {
+      CATEGORY_ID, DEVICE_ID, VIN, LICENSE_PLATE, MAKE, MODEL,
+      MODEL_YEAR, COLOR, IMAGE_URL, ODOMETER_KM, STATUS, BRANCH_ID
+    } = req.body;
 
-    // ✅ If device selected: ensure it's available (not already used by another car)
-    if (payload.DEVICE_ID) {
-      const check = await conn.execute(
-        `SELECT 1 AS X FROM CARS WHERE DEVICE_ID = :deviceId`,
-        { deviceId: payload.DEVICE_ID }
-      );
-      if ((check.rows || []).length > 0) {
-        return res.status(409).json({ message: "Device already assigned to another car" });
-      }
-    }
-
-    const sql = `
+    // A. Insert Car
+    const insertSql = `
       INSERT INTO CARS (
-        CATEGORY_ID, DEVICE_ID, VIN, LICENSE_PLATE,
-        MAKE, MODEL, MODEL_YEAR, COLOR, IMAGE_URL,
-        ODOMETER_KM, STATUS, BRANCH_ID
+        CATEGORY_ID, DEVICE_ID, VIN, LICENSE_PLATE, MAKE, MODEL, 
+        MODEL_YEAR, COLOR, IMAGE_URL, ODOMETER_KM, STATUS, BRANCH_ID
       ) VALUES (
-        :CATEGORY_ID, :DEVICE_ID, :VIN, :LICENSE_PLATE,
-        :MAKE, :MODEL, :MODEL_YEAR, :COLOR, :IMAGE_URL,
-        :ODOMETER_KM, :STATUS, :BRANCH_ID
+        :catId, :devId, :vin, :plate, :make, :model, 
+        :year, :color, :img, :odo, :status, :branchId
       )
-      RETURNING CAR_ID INTO :OUT_CAR_ID
+      RETURNING CAR_ID INTO :id
     `;
 
     const binds = {
-      ...payload,
-      OUT_CAR_ID: { dir: require("oracledb").BIND_OUT, type: require("oracledb").NUMBER },
+      catId: CATEGORY_ID,
+      devId: DEVICE_ID || null,
+      vin: VIN,
+      plate: LICENSE_PLATE,
+      make: MAKE,
+      model: MODEL,
+      year: MODEL_YEAR,
+      color: COLOR,
+      img: IMAGE_URL,
+      odo: ODOMETER_KM,
+      status: STATUS || 'AVAILABLE',
+      branchId: BRANCH_ID,
+      id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }
     };
 
-    const r = await conn.execute(sql, binds, { autoCommit: true });
-    const newId = r.outBinds?.OUT_CAR_ID?.[0];
+    // Use autoCommit: false to handle transaction manually
+    const r = await conn.execute(insertSql, binds, { autoCommit: false });
+    const newCarId = r.outBinds.id[0];
 
-    res.status(201).json({ CAR_ID: newId });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: e.message || "Failed to create car" });
+    // B. Update Device Status if assigned
+    if (DEVICE_ID) {
+      await conn.execute(
+        `UPDATE IOT_DEVICES SET STATUS = 'ACTIVE', BRANCH_ID = :bid WHERE DEVICE_ID = :did`,
+        { bid: BRANCH_ID, did: DEVICE_ID },
+        { autoCommit: false }
+      );
+    }
+
+    await conn.commit(); // Commit both actions
+    
+    // Return the minimal data needed or fetch the full row if preferred
+    res.status(201).json({ CAR_ID: newCarId, MAKE, MODEL, ...req.body });
+
+  } catch (err) {
+    try { await conn.rollback(); } catch {} // Rollback on error
+    console.error(err);
+    res.status(500).json({ message: "Failed to create car" });
   } finally {
     try { if (conn) await conn.close(); } catch {}
   }
