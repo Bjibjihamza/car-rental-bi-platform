@@ -1,4 +1,4 @@
-// src/index.js
+// src/api/src/index.js
 const express = require("express");
 const cors = require("cors");
 const { initPool } = require("./db");
@@ -35,6 +35,10 @@ app.use("/api/v1/customers", customersRouter);
 app.use("/api/v1/managers", managersRouter);
 app.use("/api/v1/iot-alerts", iotAlertsRouter);
 app.use("/api/v1/iot-telemetry", iotTelemetryRouter);
+app.use("/api/v1/devices", devicesRouter);
+app.use("/api/v1/branches", branchesRouter);
+app.use("/api/v1/managers", managersRouter);
+app.use("/api/v1/rentals", rentalsRouter);
 
 const PORT = process.env.PORT || 8000;
 

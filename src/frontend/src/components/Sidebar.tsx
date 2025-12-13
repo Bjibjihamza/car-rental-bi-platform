@@ -1,3 +1,4 @@
+// src/frontend/src/components/Sidebar.tsx
 import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -12,7 +13,9 @@ import {
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 
-const NAV = [
+type NavItem = { to: string; icon: any; label: string; onlySupervisor?: boolean };
+
+const NAV: NavItem[] = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/cars", icon: Car, label: "Fleet" },
   { to: "/devices", icon: Cpu, label: "IoT" },
@@ -20,10 +23,16 @@ const NAV = [
   { to: "/rentals", icon: ClipboardList, label: "Rentals" },
   { to: "/alerts", icon: Bell, label: "Alerts" },
   { to: "/telemetry", icon: Activity, label: "Telemetry" },
+
+  // ✅ NEW (supervisor only)
+  { to: "/managers", icon: Users, label: "Managers", onlySupervisor: true },
 ];
 
 export function Sidebar() {
   const { user, logout } = useAuth();
+  const isSup = user?.role === "supervisor";
+
+  const items = NAV.filter((i) => (i.onlySupervisor ? isSup : true));
 
   return (
     <aside className="bg-[#0B0F14] text-white/80">
@@ -35,7 +44,7 @@ export function Sidebar() {
 
         {/* Nav */}
         <nav className="mt-2 flex flex-1 flex-col items-center gap-2">
-          {NAV.map((item) => (
+          {items.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -50,7 +59,6 @@ export function Sidebar() {
             >
               {({ isActive }) => (
                 <>
-                  {/* left active indicator */}
                   {isActive && (
                     <span className="absolute -left-3 h-7 w-1 rounded-full bg-indigo-400" />
                   )}
@@ -81,3 +89,4 @@ export function Sidebar() {
     </aside>
   );
 }
+ 

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 
 /* ================= TYPES ================= */
+type DeviceOption = { DEVICE_ID: number; DEVICE_CODE: string; STATUS: string };
+
 type CarRow = {
   CAR_ID: number;
   CATEGORY_ID: number;
@@ -24,6 +26,17 @@ type BranchRow = {
   BRANCH_ID: number;
   BRANCH_NAME: string;
   CITY: string;
+};
+
+type DeviceRow = {
+  DEVICE_ID: number;
+  DEVICE_CODE: string;
+  DEVICE_IMEI?: string | null;
+  FIRMWARE_VERSION?: string | null;
+  STATUS: string;
+  ACTIVATED_AT?: string | null;
+  LAST_SEEN_AT?: string | null;
+  CREATED_AT: string;
 };
 
 /* ================= CONFIG ================= */
@@ -104,7 +117,10 @@ export function CarsPage() {
   // Create modal
   const [createOpen, setCreateOpen] = useState(false);
   const [branches, setBranches] = useState<BranchRow[]>([]);
+  const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [creating, setCreating] = useState(false);
+const [freeDevices, setFreeDevices] = useState<DeviceOption[]>([]);
+
 
   const [form, setForm] = useState({
     CATEGORY_ID: 1,
@@ -121,7 +137,27 @@ export function CarsPage() {
     BRANCH_ID: "" as any,
   });
 
+  
   /* ================= FETCH ================= */
+async function fetchFreeDevices() {
+  if (!user || !isSup) return;
+  try {
+    const res = await fetch(`${API_URL}/api/v1/devices/available`, {
+      headers: {
+        Accept: "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    const data = await res.json().catch(() => []);
+    if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+    setFreeDevices(Array.isArray(data) ? data : []);
+  } catch (e) {
+    console.error("fetchFreeDevices:", e);
+    setFreeDevices([]);
+  }
+}
+
+
   async function fetchCars() {
     if (!user) return;
 
@@ -166,8 +202,28 @@ export function CarsPage() {
 
       setBranches(Array.isArray(data) ? data : []);
     } catch (e) {
-      // branches non bloquant
       console.error("fetchBranches:", e);
+    }
+  }
+
+  // ✅ only available devices (not linked to a car)
+  async function fetchAvailableDevices() {
+    if (!user || !isSup) return;
+
+    try {
+      const res = await fetch(`${API_URL}/api/v1/devices/available`, {
+        headers: {
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      const data = await res.json().catch(() => []);
+      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+
+      setDevices(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("fetchAvailableDevices:", e);
     }
   }
 
@@ -222,9 +278,19 @@ export function CarsPage() {
 
   useEffect(() => {
     fetchCars();
-    fetchBranches();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.role, user?.branchId]);
+
+  // ✅ load branches + available devices when opening modal
+  useEffect(() => {
+      if (createOpen) fetchFreeDevices();
+
+    if (createOpen && isSup) {
+      fetchBranches();
+      fetchAvailableDevices();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createOpen]);
 
   /* ================= FILTERING ================= */
   const statusOptions = useMemo(
@@ -424,6 +490,27 @@ export function CarsPage() {
             </div>
 
             <div className="mt-4 grid gap-3">
+              {/* ✅ DEVICE SELECT (AVAILABLE ONLY) */}
+              <select
+                className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
+                value={form.DEVICE_ID === null ? "" : String(form.DEVICE_ID)}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    DEVICE_ID: e.target.value ? Number(e.target.value) : null,
+                  })
+                }
+              >
+                <option value="">No device (optional)</option>
+                {devices.map((d) => (
+                  <option key={d.DEVICE_ID} value={String(d.DEVICE_ID)}>
+                    #{d.DEVICE_ID} — {d.DEVICE_CODE}
+                    {d.DEVICE_IMEI ? ` (IMEI: ${d.DEVICE_IMEI})` : ""}
+                    {d.STATUS ? ` — ${d.STATUS}` : ""}
+                  </option>
+                ))}
+              </select>
+
               <input
                 className="h-10 rounded-xl bg-slate-900 px-3 text-slate-100"
                 placeholder="VIN"

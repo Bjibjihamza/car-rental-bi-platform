@@ -1,3 +1,4 @@
+// src/frontend/src/routes/AppRoutes.tsx
 import { Routes, Route, Navigate } from "react-router-dom";
 import { ProtectedRoute } from "../auth/ProtectedRoute";
 import { ProtectedLayout } from "../components/ProtectedLayout";
@@ -10,6 +11,7 @@ import { BranchesPage } from "../pages/Branches";
 import { RentalsPage } from "../pages/Rentals";
 import { AlertsPage } from "../pages/Alerts";
 import { TelemetryPage } from "../pages/Telemetry";
+import { ManagersPage } from "../pages/Managers"; // ✅ NEW
 import { NotFoundPage } from "../pages/NotFound";
 
 export function AppRoutes() {
@@ -18,7 +20,6 @@ export function AppRoutes() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-      {/* everything protected shares same layout */}
       <Route
         element={
           <ProtectedRoute>
@@ -33,6 +34,9 @@ export function AppRoutes() {
         <Route path="/rentals" element={<RentalsPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/telemetry" element={<TelemetryPage />} />
+
+        {/* ✅ NEW */}
+        <Route path="/managers" element={<ManagersPage />} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

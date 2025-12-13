@@ -1,6 +1,5 @@
 // src/api/src/db.js
 const oracledb = require("oracledb");
-
 oracledb.outFormat = oracledb.OUT_FORMAT_OBJECT;
 
 let pool;
