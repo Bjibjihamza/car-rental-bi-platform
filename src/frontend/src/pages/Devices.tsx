@@ -4,8 +4,8 @@ import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { Badge } from "../components/Badge";
 import { 
-  RefreshCw, Plus, X, Search, Cpu, Signal, 
-  Wifi, WifiOff, AlertCircle, Smartphone, Edit, Trash2 
+  RefreshCw, Plus, X, Cpu, Signal, 
+  Wifi, WifiOff, AlertCircle, Smartphone, Edit, Trash2, MapPin
 } from "lucide-react";
 
 /* ================= TYPES ================= */
@@ -14,12 +14,22 @@ type DeviceRow = {
   DEVICE_CODE: string;
   DEVICE_IMEI: string | null;
   FIRMWARE_VERSION: string | null;
-  STATUS: "ACTIVE" | "INACTIVE" | "RETIRED" | string;
+  STATUS: string;
   ACTIVATED_AT: string | null;
   LAST_SEEN_AT: string | null;
   CREATED_AT: string;
+  
+  // Assignment Info
   CAR_ID: number | null;
-  BRANCH_ID: number | null;
+  LICENSE_PLATE: string | null;
+  MAKE: string | null;
+  MODEL: string | null;
+
+  // Location Info (Calculated by Backend)
+  ACTUAL_BRANCH_ID: number | null;
+  BRANCH_NAME: string | null;
+  BRANCH_CITY: string | null;
+  IS_INSTALLED: number; // 1 = in car, 0 = stock
 };
 
 type BranchOption = { BRANCH_ID: number; BRANCH_NAME: string; CITY: string };
@@ -83,14 +93,14 @@ export function DevicesPage() {
   // Modal State
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [editMode, setEditMode] = useState<DeviceRow | null>(null); // Null = Create
+  const [editMode, setEditMode] = useState<DeviceRow | null>(null);
 
   const [form, setForm] = useState({
     DEVICE_CODE: "",
     DEVICE_IMEI: "",
     FIRMWARE_VERSION: "",
     STATUS: "INACTIVE",
-    BRANCH_ID: "" as any, // New Field
+    BRANCH_ID: "" as any,
   });
 
   /* ================= API CALLS ================= */
@@ -108,7 +118,6 @@ export function DevicesPage() {
     finally { setLoading(false); }
   }
 
-  // Fetch branches for the dropdown
   async function fetchBranches() {
     if (!user || !isSup) return;
     try {
@@ -182,7 +191,7 @@ export function DevicesPage() {
           DEVICE_IMEI: row.DEVICE_IMEI || "",
           FIRMWARE_VERSION: row.FIRMWARE_VERSION || "",
           STATUS: row.STATUS,
-          BRANCH_ID: row.BRANCH_ID ? String(row.BRANCH_ID) : ""
+          BRANCH_ID: row.ACTUAL_BRANCH_ID ? String(row.ACTUAL_BRANCH_ID) : ""
       });
       setModalOpen(true);
   }
@@ -283,11 +292,27 @@ export function DevicesPage() {
                         <span className="font-medium text-white">{r.DEVICE_CODE}</span>
                     </div>
                 )},
-                { key: "DEVICE_IMEI", header: "IMEI", render: r => <span className="font-mono text-xs text-neutral-400">{r.DEVICE_IMEI || "—"}</span> },
                 { key: "STATUS", header: "Status", render: r => <Badge tone={badgeTone(r.STATUS)}>{r.STATUS}</Badge> },
-                { key: "BRANCH_ID", header: "Branch", render: r => r.BRANCH_ID ? <span className="text-xs text-neutral-400">Branch #{r.BRANCH_ID}</span> : <span className="text-xs text-neutral-600 italic">Global</span> },
+                { key: "BRANCH_ID", header: "Location", render: r => (
+                    <div className="flex items-center gap-2">
+                        <MapPin size={12} className={r.BRANCH_NAME ? "text-indigo-400" : "text-neutral-600"}/>
+                        <div className="flex flex-col">
+                            {r.BRANCH_NAME ? (
+                                <>
+                                    <span className="text-sm text-white font-medium">{r.BRANCH_CITY}</span>
+                                    <span className="text-[10px] text-neutral-500">{r.BRANCH_NAME} {r.IS_INSTALLED ? "(Vehicle)" : "(Stock)"}</span>
+                                </>
+                            ) : (
+                                <span className="text-xs text-neutral-500 italic">Global / Unassigned</span>
+                            )}
+                        </div>
+                    </div>
+                )},
                 { key: "CAR_ID", header: "Assignment", render: r => r.CAR_ID ? (
-                    <Badge tone="blue">Vehicle #{r.CAR_ID}</Badge>
+                    <div className="flex flex-col">
+                        <Badge tone="blue">Vehicle #{r.CAR_ID}</Badge>
+                        <span className="text-[10px] text-neutral-500 mt-1">{r.MAKE} {r.MODEL}</span>
+                    </div>
                 ) : (
                     <span className="text-xs text-neutral-500 italic">Unassigned</span>
                 )},
@@ -348,14 +373,21 @@ export function DevicesPage() {
                                 <div><div className="text-neutral-500 text-xs">Firmware</div><div className="text-white font-mono">{selected.FIRMWARE_VERSION || "—"}</div></div>
                                 <div><div className="text-neutral-500 text-xs">Registered</div><div className="text-white">{fmtDate(selected.CREATED_AT)}</div></div>
                                 <div><div className="text-neutral-500 text-xs">Last Ping</div><div className="text-white">{fmtDate(selected.LAST_SEEN_AT)}</div></div>
-                                <div><div className="text-neutral-500 text-xs">Assigned Branch</div><div className="text-white">{selected.BRANCH_ID ? `Branch #${selected.BRANCH_ID}` : "Global / Unassigned"}</div></div>
+                                <div>
+                                    <div className="text-neutral-500 text-xs">Location</div>
+                                    <div className="text-white">
+                                        {selected.BRANCH_NAME ? `${selected.BRANCH_CITY} (${selected.BRANCH_NAME})` : "Global Pool"}
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
                         {selected.CAR_ID ? (
                              <div className="rounded-xl bg-emerald-500/10 p-4 border border-emerald-500/20">
                                 <h4 className="text-sm font-bold text-emerald-300 mb-1 flex items-center gap-2">Active Assignment</h4>
-                                <p className="text-xs text-emerald-200/60">This device is currently linked to Vehicle ID #{selected.CAR_ID}.</p>
+                                <p className="text-xs text-emerald-200/60">
+                                    Linked to <strong>{selected.MAKE} {selected.MODEL}</strong> ({selected.LICENSE_PLATE}).
+                                </p>
                              </div>
                         ) : (
                              <div className="rounded-xl bg-amber-500/10 p-4 border border-amber-500/20">

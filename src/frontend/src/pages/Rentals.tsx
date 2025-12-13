@@ -4,8 +4,8 @@ import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { Badge } from "../components/Badge";
 import { 
-  RefreshCw, Plus, X, Calendar, User, 
-  Car as CarIcon, MapPin, DollarSign, ArrowRight 
+  RefreshCw, Plus, X, Calendar, 
+  Car as CarIcon, MapPin, Activity 
 } from "lucide-react";
 
 /* ================= TYPES ================= */
@@ -18,18 +18,21 @@ type RentalRow = {
   START_AT: string;
   DUE_AT: string;
   RETURN_AT: string | null;
-  STATUS: "ACTIVE" | "IN_PROGRESS" | "CLOSED" | "CANCELLED" | string;
+  STATUS: string;
   START_ODOMETER: number | null;
   END_ODOMETER: number | null;
   TOTAL_AMOUNT: number | null;
   CURRENCY: string | null;
   CREATED_AT: string;
+  
+  // Display Fields
   BRANCH_CITY?: string | null;
   LICENSE_PLATE?: string | null;
   MAKE?: string | null;
   MODEL?: string | null;
   CUSTOMER_FIRST_NAME?: string | null;
   CUSTOMER_LAST_NAME?: string | null;
+  IS_DRIVING?: number; // 1 = Driving, 0 = Stopped
 };
 
 type CarOption = { CAR_ID: number; LICENSE_PLATE: string; MAKE: string; MODEL: string; BRANCH_ID: number | null };
@@ -50,7 +53,8 @@ function money(amount: number | null, cur: string | null) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: cur || 'USD' }).format(amount);
 }
 
-function badgeTone(status: string) {
+function badgeTone(status: string, isDriving?: number) {
+  if (isDriving === 1 && status !== 'CLOSED' && status !== 'CANCELLED') return "indigo";
   const s = String(status || "").toUpperCase();
   if (s === "ACTIVE") return "green";
   if (s === "IN_PROGRESS") return "blue";
@@ -64,12 +68,10 @@ export function RentalsPage() {
   const { user, token } = useAuth();
   const isSup = user?.role === "supervisor";
 
-  // Data State
   const [rows, setRows] = useState<RentalRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  // UI State
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("ALL");
   const [selected, setSelected] = useState<RentalRow | null>(null);
@@ -83,21 +85,22 @@ export function RentalsPage() {
   const [branches, setBranches] = useState<BranchOption[]>([]);
 
   const [form, setForm] = useState({
-    CAR_ID: "" as any,
-    CUSTOMER_ID: "" as any,
-    BRANCH_ID: "" as any, 
+    CAR_ID: "",
+    CUSTOMER_ID: "",
+    BRANCH_ID: "", 
     START_AT: "",
     DUE_AT: "",
     STATUS: "ACTIVE",
-    START_ODOMETER: "" as any,
-    TOTAL_AMOUNT: "" as any,
+    START_ODOMETER: "",
+    TOTAL_AMOUNT: "",
     CURRENCY: "MAD",
   });
 
-  /* ================= FETCHING ================= */
   async function fetchRentals() {
     if (!user) return;
-    setLoading(true); setErr(null);
+    // Don't set full loading on refresh to avoid flickering
+    if (rows.length === 0) setLoading(true);
+    setErr(null);
     try {
       const res = await fetch(`${API_URL}/api/v1/rentals`, {
         headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -109,31 +112,31 @@ export function RentalsPage() {
     finally { setLoading(false); }
   }
 
-  // Fetch helpers for modal
+  // Poll for updates every 5 seconds to catch "Driving" status changes
+  useEffect(() => {
+    fetchRentals();
+    const interval = setInterval(fetchRentals, 5000);
+    return () => clearInterval(interval);
+  }, [user?.role, user?.branchId]);
+
+  // Fetch Options for Modal
   async function fetchOptions() {
       if (!user) return;
       const headers = { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
       
-      // Fetch Cars
-      fetch(`${API_URL}/api/v1/cars`, { headers }).then(r => r.json()).then(data => {
-          if(Array.isArray(data)) {
-              setCars(data.filter((c:any) => c.STATUS === 'AVAILABLE').map((c:any) => ({
+      Promise.all([
+        fetch(`${API_URL}/api/v1/cars`, { headers }).then(r => r.json()),
+        fetch(`${API_URL}/api/v1/customers`, { headers }).then(r => r.json()),
+        isSup ? fetch(`${API_URL}/api/v1/branches`, { headers }).then(r => r.json()) : Promise.resolve([])
+      ]).then(([carsData, custData, branchData]) => {
+          if(Array.isArray(carsData)) {
+              setCars(carsData.filter((c:any) => c.STATUS === 'AVAILABLE').map((c:any) => ({
                   CAR_ID: c.CAR_ID, LICENSE_PLATE: c.LICENSE_PLATE, MAKE: c.MAKE, MODEL: c.MODEL, BRANCH_ID: c.BRANCH_ID
               })));
           }
-      }).catch(() => {});
-
-      // Fetch Customers
-      fetch(`${API_URL}/api/v1/customers`, { headers }).then(r => r.json()).then(data => {
-          if(Array.isArray(data)) setCustomers(data);
-      }).catch(() => {});
-
-      // Fetch Branches (if Supervisor)
-      if(isSup) {
-          fetch(`${API_URL}/api/v1/branches`, { headers }).then(r => r.json()).then(data => {
-              if(Array.isArray(data)) setBranches(data);
-          }).catch(() => {});
-      }
+          if(Array.isArray(custData)) setCustomers(custData);
+          if(Array.isArray(branchData)) setBranches(branchData);
+      }).catch(console.error);
   }
 
   async function createRental() {
@@ -169,9 +172,8 @@ export function RentalsPage() {
   }
 
   useEffect(() => { 
-      fetchRentals(); 
-      fetchOptions();
-  }, [user?.role, user?.branchId]);
+      if (createOpen) fetchOptions();
+  }, [createOpen]);
 
   /* ================= FILTERING ================= */
   const filtered = useMemo(() => {
@@ -245,7 +247,19 @@ export function RentalsPage() {
                         <span className="text-neutral-300">{r.CUSTOMER_FIRST_NAME} {r.CUSTOMER_LAST_NAME}</span>
                     </div>
                 )},
-                { key: "STATUS", header: "Status", render: r => <Badge tone={badgeTone(r.STATUS)}>{r.STATUS}</Badge> },
+                { key: "STATUS", header: "Status", render: r => (
+                    <Badge tone={badgeTone(r.STATUS, r.IS_DRIVING)}>
+                        {r.IS_DRIVING === 1 && r.STATUS !== 'CLOSED' && r.STATUS !== 'CANCELLED' ? (
+                            <span className="flex items-center gap-1.5">
+                                <span className="relative flex h-2 w-2">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                                </span>
+                                DRIVING
+                            </span>
+                        ) : r.STATUS}
+                    </Badge>
+                )},
                 { key: "DATES", header: "Duration", render: r => (
                     <div className="text-xs">
                         <div className="text-neutral-300">From: {fmtDate(r.START_AT)}</div>
@@ -279,7 +293,9 @@ export function RentalsPage() {
                                 <h3 className="text-xl font-bold text-white">Rental #{selected.RENTAL_ID}</h3>
                                 <div className="text-neutral-400 text-sm mt-1">{fmtDate(selected.CREATED_AT)}</div>
                             </div>
-                            <Badge tone={badgeTone(selected.STATUS)}>{selected.STATUS}</Badge>
+                            <Badge tone={badgeTone(selected.STATUS, selected.IS_DRIVING)}>
+                                {selected.IS_DRIVING === 1 && selected.STATUS !== 'CLOSED' ? "DRIVING" : selected.STATUS}
+                            </Badge>
                         </div>
                         <div className="grid grid-cols-2 gap-4 border-t border-white/5 pt-4">
                             <div>
@@ -308,6 +324,12 @@ export function RentalsPage() {
                             <span className="text-neutral-400">Odometer (Start)</span>
                             <span className="text-white font-mono">{selected.START_ODOMETER ? `${selected.START_ODOMETER} km` : "—"}</span>
                         </div>
+                        {selected.IS_DRIVING === 1 && selected.STATUS !== 'CLOSED' && (
+                            <div className="mt-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 p-2 text-center text-xs text-indigo-300 font-bold flex justify-center items-center gap-2">
+                                <Activity size={14} className="animate-pulse" />
+                                Vehicle currently moving
+                            </div>
+                        )}
                     </div>
 
                     {/* Timeline */}
@@ -357,7 +379,6 @@ export function RentalsPage() {
                             onChange={e => {
                                 const v = e.target.value;
                                 setForm(f => ({...f, CAR_ID: v}));
-                                // Auto-select branch for supervisors based on car
                                 if(isSup) {
                                     const c = cars.find(car => String(car.CAR_ID) === v);
                                     if(c?.BRANCH_ID) setForm(f => ({...f, BRANCH_ID: String(c.BRANCH_ID) as any}));
@@ -399,7 +420,6 @@ export function RentalsPage() {
                         </div>
                     )}
 
-                    {/* Dates */}
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1">
                             <label className="text-xs font-medium text-neutral-400">Start Date</label>
@@ -427,8 +447,8 @@ export function RentalsPage() {
                     </div>
 
                     <div className="pt-4 flex gap-3">
-                         <button onClick={() => setCreateOpen(false)} className="flex-1 rounded-xl border border-white/10 bg-transparent py-2.5 text-sm font-bold text-white hover:bg-white/5 transition">Cancel</button>
-                         <button 
+                            <button onClick={() => setCreateOpen(false)} className="flex-1 rounded-xl border border-white/10 bg-transparent py-2.5 text-sm font-bold text-white hover:bg-white/5 transition">Cancel</button>
+                            <button 
                             onClick={createRental}
                             disabled={creating} 
                             className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 shadow-lg shadow-indigo-600/20 transition disabled:opacity-50"

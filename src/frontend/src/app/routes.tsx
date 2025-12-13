@@ -1,4 +1,3 @@
-// src/frontend/src/routes/AppRoutes.tsx
 import { Routes, Route, Navigate } from "react-router-dom";
 import { ProtectedRoute } from "../auth/ProtectedRoute";
 import { ProtectedLayout } from "../components/ProtectedLayout";
@@ -11,7 +10,8 @@ import { BranchesPage } from "../pages/Branches";
 import { RentalsPage } from "../pages/Rentals";
 import { AlertsPage } from "../pages/Alerts";
 import { TelemetryPage } from "../pages/Telemetry";
-import { ManagersPage } from "../pages/Managers"; // ✅ NEW
+import { ManagersPage } from "../pages/Managers";
+import { LiveMonitor } from "../pages/LiveMonitor"; // [NEW] Import
 import { NotFoundPage } from "../pages/NotFound";
 
 export function AppRoutes() {
@@ -28,14 +28,13 @@ export function AppRoutes() {
         }
       >
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/live" element={<LiveMonitor />} /> {/* [NEW] Route */}
         <Route path="/cars" element={<CarsPage />} />
         <Route path="/devices" element={<DevicesPage />} />
         <Route path="/branches" element={<BranchesPage />} />
         <Route path="/rentals" element={<RentalsPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/telemetry" element={<TelemetryPage />} />
-
-        {/* ✅ NEW */}
         <Route path="/managers" element={<ManagersPage />} />
       </Route>
 

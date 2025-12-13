@@ -8,7 +8,7 @@ export function LoginPage() {
   const location = useLocation();
   const { login } = useAuth();
 
-  const from = (location.state as any)?.from || "/dashboard";
+  const from = location.state?.from || "/dashboard";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,8 +24,10 @@ export function LoginPage() {
 
     try {
       await login(email.trim(), password);
+      // Navigate to the page they tried to visit or dashboard
       navigate(from, { replace: true });
     } catch (err: any) {
+      console.error("Login Failed:", err);
       setError(err?.message || "Invalid credentials");
     } finally {
       setLoading(false);
@@ -42,8 +44,8 @@ export function LoginPage() {
       <div className="absolute bottom-[-10%] right-[-10%] h-[500px] w-[500px] rounded-full bg-violet-600/10 blur-[120px]" />
 
       <div className="relative w-full max-w-md">
-        {/* Glass Card */}
-        <div className="rounded-[32px] border border-white/10 bg-[#121212]/60 backdrop-blur-xl shadow-2xl p-8 sm:p-10">
+        {/* Glass Card with Entrance Animation */}
+        <div className="rounded-[32px] border border-white/10 bg-[#121212]/80 backdrop-blur-xl shadow-2xl p-8 sm:p-10 animate-in zoom-in-95 fade-in duration-500">
           
           <div className="mb-8 text-center">
             <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/20">

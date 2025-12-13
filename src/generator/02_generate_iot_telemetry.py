@@ -1,4 +1,4 @@
-# 03_generate_iot_telemetry.py
+# 02_generate_iot_telemetry.py
 # ============================================================
 # Generate synthetic IoT telemetry and write it directly
 # into Oracle table IOT_TELEMETRY.
@@ -120,30 +120,14 @@ engine = create_engine(
 # DATE LOGIC: START DATE FROM DB OR TODAY
 # ============================================================
 
-def get_start_date_from_db_or_today():
+def get_start_datetime_now_plus_5min():
     """
-    Si IOT_TELEMETRY contient déjà des données :
-        start_date = (max(EVENT_TS).date() + 1 jour)
-    Sinon :
-        start_date = date.today()
+    Start telemetry at (now + 5 minutes), regardless of DB content.
     """
-    max_ts = None
-    try:
-        with engine.connect() as conn:
-            res = conn.execute(text("SELECT MAX(EVENT_TS) FROM IOT_TELEMETRY"))
-            max_ts = res.scalar()
-    except SQLAlchemyError as e:
-        print(f"ℹ️ Impossible de lire MAX(EVENT_TS) dans IOT_TELEMETRY : {e}")
-        max_ts = None
+    start_dt = datetime.now() + timedelta(minutes=5)
+    print(f"⏱️ Run start anchor = now+5min = {start_dt}")
+    return start_dt
 
-    if max_ts:
-        start = (max_ts + timedelta(days=1)).date()
-        print(f"📅 Télémetrie existante jusqu’au {max_ts.date()} → nouveau start_date = {start}")
-        return start
-    else:
-        today = date.today()
-        print(f"📅 Aucune télémetrie en base → start_date = aujourd’hui = {today}")
-        return today
 
 # ============================================================
 # UTILS
@@ -625,7 +609,7 @@ def generate_trip_points(
 # RENTAL-LEVEL SIMULATION
 # ============================================================
 
-def simulate_car_for_period(car_row, start_date, days_forward):
+def simulate_car_for_period(car_row, start_dt, days_forward):
     all_rows = []
     car_id = int(car_row["CAR_ID"])
     print(f"🚗 Simulating car {car_id} ({car_row['LICENSE_PLATE']})")
@@ -658,7 +642,8 @@ def simulate_car_for_period(car_row, start_date, days_forward):
             if day_index + offset >= days_forward:
                 break
 
-            day = start_date + timedelta(days=day_index + offset)
+            # Day derived from the datetime anchor
+            day = (start_dt + timedelta(days=day_index + offset)).date()
 
             r = random.random()
             if r < P_NO_TRIP:
@@ -671,16 +656,20 @@ def simulate_car_for_period(car_row, start_date, days_forward):
             if trips_today == 0:
                 continue
 
-            # Windows pour ce jour (70% sans 04–08 & 14–16)
             windows = build_allowed_windows_for_day()
 
             for _ in range(trips_today):
                 start_minute = sample_start_minute_from_windows(windows)
-                # sécurité pour éviter un trajet qui déborde trop la fenêtre hard
+
                 latest_start = DAY_END_HOUR * 60 - 30
                 start_minute = min(start_minute, latest_start)
 
                 trip_start_dt = datetime.combine(day, datetime.min.time()) + timedelta(minutes=start_minute)
+
+                # ✅ Force first day to not start before now+5min
+                if day == start_dt.date() and trip_start_dt < start_dt:
+                    trip_start_dt = start_dt
+
                 trip_duration_min = random.randint(TRIP_DURATION_MIN_MIN, TRIP_DURATION_MIN_MAX)
 
                 rows, odometer_km, fuel_pct = generate_trip_points(
@@ -754,10 +743,10 @@ def write_telemetry_to_oracle(all_rows):
 
 def generate_iot_telemetry_db():
     setup_random_seed()
-    start_date = get_start_date_from_db_or_today()
+    start_dt = get_start_datetime_now_plus_5min()
     days_forward = DAYS_FORWARD
 
-    print(f"📅 Generating telemetry from {start_date} for {days_forward} days (~1 month).")
+    print(f"📅 Generating telemetry starting at {start_dt} for {days_forward} days (~1 month).")
 
     cars_df = fetch_cars_with_devices()
     if cars_df.empty:
@@ -767,7 +756,7 @@ def generate_iot_telemetry_db():
     all_rows = []
 
     for _, car_row in cars_df.iterrows():
-        rows = simulate_car_for_period(car_row, start_date, days_forward)
+        rows = simulate_car_for_period(car_row, start_dt, days_forward)
         all_rows.extend(rows)
 
     if not all_rows:

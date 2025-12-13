@@ -5,12 +5,11 @@ const { authMiddleware } = require("../authMiddleware");
 const { isSupervisor } = require("../access");
 const oracledb = require("oracledb");
 
-// 1. GET AVAILABLE DEVICES (Public/Dropdown)
+// 1. GET AVAILABLE DEVICES (For Dropdowns)
 router.get('/available', async (req, res) => {
   let conn;
   try {
     conn = await getConnection();
-    // Oracle syntax: NO "AS" for table aliases in subqueries usually, keep it simple
     const query = `
       SELECT DEVICE_ID, DEVICE_CODE, STATUS 
       FROM IOT_DEVICES 
@@ -27,19 +26,48 @@ router.get('/available', async (req, res) => {
   }
 });
 
-// 2. LIST ALL DEVICES (Admin View)
+// 2. LIST ALL DEVICES (Main Page)
 router.get("/", authMiddleware, async (req, res) => {
   let conn;
   try {
     conn = await getConnection();
+    
+    // SMART QUERY:
+    // 1. Join Device to Car (to see if it's installed)
+    // 2. Join Car to Branch (to see where the car is)
+    // 3. Join Device to Branch (fallback if not in a car)
     const sql = `
-      SELECT d.DEVICE_ID, d.DEVICE_CODE, d.DEVICE_IMEI, d.FIRMWARE_VERSION, 
-             d.STATUS, d.ACTIVATED_AT, d.LAST_SEEN_AT, d.CREATED_AT, 
-             d.BRANCH_ID, c.CAR_ID
+      SELECT 
+        d.DEVICE_ID, 
+        d.DEVICE_CODE, 
+        d.DEVICE_IMEI, 
+        d.FIRMWARE_VERSION, 
+        d.STATUS, 
+        d.ACTIVATED_AT, 
+        d.LAST_SEEN_AT, 
+        d.CREATED_AT, 
+        
+        -- Car Assignment Info
+        c.CAR_ID,
+        c.LICENSE_PLATE,
+        c.MAKE,
+        c.MODEL,
+
+        -- Location Logic: Use Car's Branch if assigned, otherwise Device's Branch
+        COALESCE(b_car.BRANCH_ID, b_dev.BRANCH_ID) as ACTUAL_BRANCH_ID,
+        COALESCE(b_car.BRANCH_NAME, b_dev.BRANCH_NAME) as BRANCH_NAME,
+        COALESCE(b_car.CITY, b_dev.CITY) as BRANCH_CITY,
+        
+        -- Flag to know source of location
+        CASE WHEN c.CAR_ID IS NOT NULL THEN 1 ELSE 0 END as IS_INSTALLED
+
       FROM IOT_DEVICES d
       LEFT JOIN CARS c ON d.DEVICE_ID = c.DEVICE_ID
+      LEFT JOIN BRANCHES b_car ON c.BRANCH_ID = b_car.BRANCH_ID  -- Branch via Car
+      LEFT JOIN BRANCHES b_dev ON d.BRANCH_ID = b_dev.BRANCH_ID  -- Branch via Device
       ORDER BY d.DEVICE_ID DESC
     `;
+    
     const r = await conn.execute(sql);
     res.json(r.rows || []);
   } catch (e) {
@@ -50,7 +78,7 @@ router.get("/", authMiddleware, async (req, res) => {
   }
 });
 
-// 3. CREATE DEVICE (Supervisor Only)
+// 3. CREATE DEVICE
 router.post("/", authMiddleware, async (req, res) => {
   if (!isSupervisor(req)) return res.status(403).json({ message: "Supervisor only" });
 
@@ -85,7 +113,7 @@ router.post("/", authMiddleware, async (req, res) => {
   }
 });
 
-// 4. EDIT DEVICE (Supervisor Only)
+// 4. EDIT DEVICE
 router.put("/:id", authMiddleware, async (req, res) => {
   if (!isSupervisor(req)) return res.status(403).json({ message: "Supervisor only" });
 

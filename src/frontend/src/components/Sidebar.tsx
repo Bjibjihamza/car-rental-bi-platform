@@ -10,26 +10,40 @@ import {
   Activity,
   Users,
   LogOut,
+  Radio // Icon for Live Monitor
 } from "lucide-react";
 
-// --- Custom Logo Component (SVG) ---
+// --- Custom driveOps Logo Component (SVG) ---
 const AppLogo = () => (
-  <div className="relative grid h-12 w-12 place-items-center">
-    {/* Outer Glow */}
-    <div className="absolute inset-0 rounded-xl bg-indigo-500/20 blur-lg" />
+  <div className="relative grid h-12 w-12 place-items-center group">
+    {/* Background Glow Effect */}
+    <div className="absolute inset-0 rounded-xl bg-indigo-500/30 blur-lg transition-all group-hover:bg-indigo-500/50" />
     
-    {/* Main Icon Shape */}
-    <div className="relative grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-600 to-violet-600 shadow-inner ring-1 ring-white/20">
+    {/* Logo Container */}
+    <div className="relative grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-600 to-violet-700 shadow-[inset_0_1px_1px_rgba(255,255,255,0.3)] ring-1 ring-white/10 transition-all group-hover:scale-105 group-hover:from-indigo-500 group-hover:to-violet-600">
+      {/* driveOps SVG Icon */}
       <svg 
         viewBox="0 0 24 24" 
         fill="none" 
         className="h-6 w-6 text-white"
-        stroke="currentColor" 
-        strokeWidth="2.5" 
-        strokeLinecap="round" 
-        strokeLinejoin="round"
       >
-        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+        {/* The Car Silhouette */}
+        <path 
+            d="M19 13V10C19 8.89543 18.1046 8 17 8H6.99998C5.89541 8 4.99998 8.89543 4.99998 10V13M19 13C19 14.1046 18.1046 15 17 15H6.99998C5.89541 15 4.99998 14.1046 4.99998 13M19 13H21V16H19M4.99998 13H2.99998V16H4.99998M7.99998 17V19M16 17V19" 
+            stroke="currentColor" 
+            strokeWidth="2" 
+            strokeLinecap="round" 
+            strokeLinejoin="round"
+        />
+        {/* The Connectivity/Ops Signal */}
+        <path 
+            d="M8.5 4.5C10.5 2.5 13.5 2.5 15.5 4.5M10 6C11.3333 5 12.6667 5 14 6" 
+            stroke="currentColor" 
+            strokeWidth="2" 
+            strokeLinecap="round" 
+            strokeLinejoin="round"
+            className="opacity-80"
+        />
       </svg>
     </div>
   </div>
@@ -39,14 +53,14 @@ type NavItem = { to: string; icon: any; label: string; onlySupervisor?: boolean 
 
 const NAV: NavItem[] = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
-    { to: "/branches", icon: MapPin, label: "Locations" },
+  { to: "/live", icon: Radio, label: "Live Monitor" },
+  { to: "/branches", icon: MapPin, label: "Locations" },
   { to: "/managers", icon: Users, label: "Managers", onlySupervisor: true },
   { to: "/devices", icon: Cpu, label: "IoT Status" },
-
   { to: "/cars", icon: Car, label: "Fleet" },
   { to: "/rentals", icon: ClipboardList, label: "Rentals" },
   { to: "/alerts", icon: Bell, label: "Alerts" },
-  { to: "/telemetry", icon: Activity, label: "Telemetry" },
+  { to: "/telemetry", icon: Activity, label: "History" },
 ];
 
 export function Sidebar() {
@@ -59,7 +73,7 @@ export function Sidebar() {
     <aside className="fixed left-0 top-0 z-50 flex h-screen w-20 flex-col border-r border-white/10 bg-[#0B0F14] shadow-2xl">
       <div className="flex h-full flex-col items-center py-6">
         
-        {/* Logo */}
+        {/* Logo Section */}
         <div className="mb-8">
           <AppLogo />
         </div>
@@ -91,27 +105,26 @@ export function Sidebar() {
 
         {/* User & Logout Section */}
         <div className="mt-auto flex flex-col items-center gap-4 pb-2 w-full">
-            {/* Divider */}
             <div className="h-px w-8 bg-white/10" />
-
-            {/* User Avatar */}
+            {/* User Profile Initials */}
             <div className="group relative grid h-10 w-10 place-items-center rounded-full bg-neutral-800 ring-2 ring-transparent transition hover:ring-indigo-500/50">
                 <span className="text-xs font-bold text-indigo-400">
                     {(user?.firstName?.[0] ?? "H").toUpperCase()}
                 </span>
-                {/* User Tooltip */}
                 <div className="absolute left-14 z-[60] hidden whitespace-nowrap rounded-md border border-white/10 bg-[#18181b] px-3 py-1.5 text-xs font-medium text-white shadow-xl group-hover:block">
-                    Profile
+                    Profile: {user?.firstName}
                 </div>
             </div>
 
             {/* Logout Button */}
             <button
                 onClick={logout}
-                title="Logout"
-                className="group flex h-10 w-10 items-center justify-center rounded-xl text-neutral-500 transition hover:bg-red-500/10 hover:text-red-400"
+                className="group relative flex h-10 w-10 items-center justify-center rounded-xl text-neutral-500 transition hover:bg-red-500/10 hover:text-red-400"
             >
                 <LogOut className="h-5 w-5" />
+                 <div className="absolute left-14 z-[60] hidden whitespace-nowrap rounded-md border border-white/10 bg-[#18181b] px-3 py-1.5 text-xs font-medium text-white shadow-xl group-hover:block">
+                    Logout
+                </div>
             </button>
         </div>
       </div>

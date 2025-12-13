@@ -18,8 +18,7 @@ function requireBody(res, body, fields) {
 
 /**
  * GET /api/v1/rentals
- * Supervisor => all rentals
- * Manager    => only rentals for his branch
+ * Fetches rentals and checks if the linked car is currently active in the live feed.
  */
 router.get("/", authMiddleware, async (req, res) => {
   let conn;
@@ -44,13 +43,25 @@ router.get("/", authMiddleware, async (req, res) => {
         r.CURRENCY,
         r.CREATED_AT,
 
-        -- extra display fields
+        -- Extra Display Fields
         b.CITY AS BRANCH_CITY,
         c.LICENSE_PLATE,
         c.MAKE,
         c.MODEL,
         cu.FIRST_NAME AS CUSTOMER_FIRST_NAME,
-        cu.LAST_NAME  AS CUSTOMER_LAST_NAME
+        cu.LAST_NAME  AS CUSTOMER_LAST_NAME,
+
+        -- [NEW] Real-Time Check: Is this car currently sending data?
+        -- We check if there's a signal in the last 2 minutes (120 seconds)
+        CASE 
+          WHEN EXISTS (
+            SELECT 1 FROM RT_IOT_FEED rt 
+            WHERE rt.CAR_ID = r.CAR_ID 
+            AND rt.RECEIVED_AT > SYSTIMESTAMP - INTERVAL '2' MINUTE
+          ) THEN 1 
+          ELSE 0 
+        END AS IS_DRIVING
+
       FROM RENTALS r
       JOIN BRANCHES b ON b.BRANCH_ID = r.BRANCH_ID
       JOIN CARS c     ON c.CAR_ID = r.CAR_ID
@@ -76,13 +87,9 @@ router.get("/", authMiddleware, async (req, res) => {
 
 /**
  * POST /api/v1/rentals
- * Create a rental (manager/supervisor)
- * - manager => branch forced from JWT
- * - supervisor => must provide BRANCH_ID
  */
 router.post("/", authMiddleware, async (req, res) => {
   const user = req.user;
-
   const body = req.body || {};
   const ok = requireBody(res, body, ["CAR_ID", "CUSTOMER_ID", "START_AT", "DUE_AT"]);
   if (!ok) return;
@@ -91,7 +98,6 @@ router.post("/", authMiddleware, async (req, res) => {
   try {
     conn = await getConnection();
 
-    // branch control
     const branchId = user.role === "supervisor"
       ? Number(body.BRANCH_ID)
       : requireBranch(req);
@@ -100,7 +106,6 @@ router.post("/", authMiddleware, async (req, res) => {
       return res.status(400).json({ message: "Missing field: BRANCH_ID" });
     }
 
-    // Insert
     const result = await conn.execute(
       `
       INSERT INTO RENTALS (
@@ -126,17 +131,21 @@ router.post("/", authMiddleware, async (req, res) => {
         customerId: Number(body.CUSTOMER_ID),
         branchId: Number(branchId),
         managerId: user.role === "manager" ? Number(user.managerId) : (body.MANAGER_ID ? Number(body.MANAGER_ID) : null),
-
         startAt: String(body.START_AT),
         dueAt: String(body.DUE_AT),
-
         status: (body.STATUS || "ACTIVE").toUpperCase(),
         startOdo: body.START_ODOMETER != null ? Number(body.START_ODOMETER) : null,
         totalAmount: body.TOTAL_AMOUNT != null ? Number(body.TOTAL_AMOUNT) : null,
         currency: (body.CURRENCY || "MAD").toUpperCase(),
-
         outId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
       },
+      { autoCommit: true }
+    );
+
+    // Update Car Status to RENTED
+    await conn.execute(
+      `UPDATE CARS SET STATUS = 'RENTED' WHERE CAR_ID = :id`,
+      { id: Number(body.CAR_ID) },
       { autoCommit: true }
     );
 
