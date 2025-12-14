@@ -247,4 +247,34 @@ CREATE INDEX IDX_RT_CAR_ID ON RT_IOT_FEED(CAR_ID);
 COMMENT ON TABLE IOT_TELEMETRY IS 'Historical Data generated for analysis';
 COMMENT ON TABLE RT_IOT_FEED IS 'Real-Time Buffer for Live Monitoring Page';
 
+
+
+-- ============================================================
+-- Seed default SUPERVISOR (Admin)
+-- ============================================================
+
+INSERT INTO MANAGERS (
+  MANAGER_CODE,
+  FIRST_NAME,
+  LAST_NAME,
+  EMAIL,
+  PHONE,
+  MANAGER_PASSWORD,
+  ROLE,
+  BRANCH_ID
+)
+SELECT
+  'SUP001',
+  'Hamza',
+  'Bjibji',
+  'hamzabjibji@gmail.com',
+  '+212636376992',
+  'admincode123',
+  'SUPERVISOR',
+  NULL
+FROM dual
+WHERE NOT EXISTS (
+  SELECT 1 FROM MANAGERS WHERE MANAGER_CODE = 'SUP001'
+);
+
 COMMIT;
