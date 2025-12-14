@@ -25,7 +25,7 @@ type DeviceRow = {
   MAKE: string | null;
   MODEL: string | null;
 
-  // Location Info (Calculated by Backend)
+  // Location Info (From Backend)
   ACTUAL_BRANCH_ID: number | null;
   BRANCH_NAME: string | null;
   BRANCH_CITY: string | null;
@@ -34,17 +34,14 @@ type DeviceRow = {
 
 type BranchOption = { BRANCH_ID: number; BRANCH_NAME: string; CITY: string };
 
-/* ================= CONFIG & HELPERS ================= */
 const API_URL = (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
 
+/* ================= HELPERS ================= */
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(d);
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(d);
 }
 
 function badgeTone(status: string): "green" | "amber" | "gray" | "red" | "blue" {
@@ -55,7 +52,6 @@ function badgeTone(status: string): "green" | "amber" | "gray" | "red" | "blue" 
   return "gray";
 }
 
-// Local Stat Component
 function NetworkStat({ label, value, icon: Icon, color }: any) {
     return (
         <div className="relative overflow-hidden rounded-2xl border border-white/5 bg-[#121212]/60 p-5 shadow-xl">
@@ -73,7 +69,7 @@ function NetworkStat({ label, value, icon: Icon, color }: any) {
     );
 }
 
-/* ================= PAGE ================= */
+/* ================= PAGE COMPONENT ================= */
 export function DevicesPage() {
   const { user, token } = useAuth();
   const isSup = user?.role === "supervisor";
@@ -86,7 +82,6 @@ export function DevicesPage() {
   // UI state
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<string>("ALL");
-
   const [selected, setSelected] = useState<DeviceRow | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -228,40 +223,6 @@ export function DevicesPage() {
   }), [devices]);
 
   /* ================= RENDER ================= */
-  const headerRight = (
-    <div className="flex flex-wrap items-center gap-3">
-        <div className="relative group hidden md:block">
-            <input
-                className="h-9 w-56 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white focus:w-64 focus:border-indigo-500/50 outline-none transition-all placeholder:text-neutral-500"
-                placeholder="Search code, IMEI..."
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-            />
-        </div>
-
-        <select 
-            className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none focus:border-indigo-500/50"
-            value={status} onChange={(e) => setStatus(e.target.value)}
-        >
-            <option value="ALL" className="bg-[#18181b]">All Status</option>
-            {["ACTIVE", "INACTIVE", "RETIRED"].map(s => <option key={s} value={s} className="bg-[#18181b]">{s}</option>)}
-        </select>
-
-        <button onClick={fetchDevices} className="h-9 w-9 grid place-items-center rounded-lg border border-white/10 bg-white/5 text-neutral-400 hover:text-white hover:bg-white/10 transition">
-            <RefreshCw size={16} />
-        </button>
-
-        {isSup && (
-            <button 
-                onClick={openCreate}
-                className="flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-500 transition"
-            >
-                <Plus size={16} /> Register Device
-            </button>
-        )}
-    </div>
-  );
-
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       
@@ -277,7 +238,31 @@ export function DevicesPage() {
       <Card 
         title="IoT Device Registry" 
         subtitle="Manage hardware, firmware, and vehicle assignments"
-        right={headerRight}
+        right={
+            <div className="flex flex-wrap items-center gap-3">
+                <input
+                    className="h-9 w-56 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white focus:w-64 focus:border-indigo-500/50 outline-none transition-all placeholder:text-neutral-500"
+                    placeholder="Search code, IMEI..."
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                />
+                <select 
+                    className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none focus:border-indigo-500/50"
+                    value={status} onChange={(e) => setStatus(e.target.value)}
+                >
+                    <option value="ALL" className="bg-[#18181b]">All Status</option>
+                    {["ACTIVE", "INACTIVE", "RETIRED"].map(s => <option key={s} value={s} className="bg-[#18181b]">{s}</option>)}
+                </select>
+                <button onClick={fetchDevices} className="h-9 w-9 grid place-items-center rounded-lg border border-white/10 bg-white/5 text-neutral-400 hover:text-white hover:bg-white/10 transition">
+                    <RefreshCw size={16} />
+                </button>
+                {isSup && (
+                    <button onClick={openCreate} className="flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-500 transition">
+                        <Plus size={16} /> Register Device
+                    </button>
+                )}
+            </div>
+        }
         className="min-h-[600px]"
       >
         {err && <div className="mb-6 rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">{err}</div>}
@@ -285,7 +270,6 @@ export function DevicesPage() {
         <DataTable 
             rows={filtered}
             cols={[
-                { key: "DEVICE_ID", header: "ID", render: r => <span className="font-mono text-neutral-500">#{r.DEVICE_ID}</span> },
                 { key: "DEVICE_CODE", header: "Device Code", render: r => (
                     <div className="flex items-center gap-2">
                         <Smartphone size={16} className="text-neutral-500"/>
@@ -293,6 +277,8 @@ export function DevicesPage() {
                     </div>
                 )},
                 { key: "STATUS", header: "Status", render: r => <Badge tone={badgeTone(r.STATUS)}>{r.STATUS}</Badge> },
+                
+                // ✅ UPDATED LOCATION COLUMN
                 { key: "BRANCH_ID", header: "Location", render: r => (
                     <div className="flex items-center gap-2">
                         <MapPin size={12} className={r.BRANCH_NAME ? "text-indigo-400" : "text-neutral-600"}/>
@@ -308,6 +294,7 @@ export function DevicesPage() {
                         </div>
                     </div>
                 )},
+                
                 { key: "CAR_ID", header: "Assignment", render: r => r.CAR_ID ? (
                     <div className="flex flex-col">
                         <Badge tone="blue">Vehicle #{r.CAR_ID}</Badge>
@@ -316,13 +303,14 @@ export function DevicesPage() {
                 ) : (
                     <span className="text-xs text-neutral-500 italic">Unassigned</span>
                 )},
-                { key: "FIRMWARE_VERSION", header: "Firmware", render: r => <span className="font-mono text-xs text-neutral-400 bg-white/5 px-1.5 py-0.5 rounded">{r.FIRMWARE_VERSION || "v1.0"}</span> },
+                
                 { key: "LAST_SEEN_AT", header: "Last Seen", render: r => (
                     <div className="flex items-center gap-2 text-xs">
                         <Signal size={12} className={r.STATUS === 'ACTIVE' ? "text-emerald-500" : "text-neutral-600"} />
                         {fmtDate(r.LAST_SEEN_AT)}
                     </div>
                 )},
+                
                 { key: "actions", header: "", render: r => (
                     <div className="flex items-center gap-2 justify-end">
                         <button onClick={() => { setSelected(r); setDrawerOpen(true); }} className="text-xs font-medium text-indigo-400 hover:text-indigo-300 hover:underline">
@@ -401,7 +389,7 @@ export function DevicesPage() {
         </div>
       )}
 
-      {/* 4. CREATE / EDIT MODAL */}
+      {/* 4. CREATE / EDIT MODAL (Supervisor Only) */}
       {modalOpen && isSup && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm px-4">
             <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-[#121212] shadow-2xl animate-in zoom-in-95 duration-200">

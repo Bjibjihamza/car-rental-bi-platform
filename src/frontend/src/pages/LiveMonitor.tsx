@@ -45,13 +45,12 @@ export function LiveMonitor() {
 
   // Poll every 3 seconds
   useEffect(() => {
-    fetchLive(); // Initial fetch
+    fetchLive(); 
     const interval = setInterval(fetchLive, 3000);
     return () => clearInterval(interval);
   }, [token]);
 
   // Derived Stats
-  // FIX: Renamed variable from 'active cars' to 'activeCars'
   const activeCars = new Set(signals.map(s => s.CAR_ID)).size;
   
   const avgSpeed = signals.length > 0 
@@ -79,7 +78,6 @@ export function LiveMonitor() {
           </div>
           <div>
             <p className="text-sm text-neutral-400">Active Vehicles</p>
-            {/* FIX: Updated usage here */}
             <h3 className="text-2xl font-bold text-white">{activeCars}</h3>
           </div>
         </div>
@@ -158,8 +156,9 @@ export function LiveMonitor() {
                 key: "LOC", 
                 header: "Location", 
                 render: (r) => (
+                  // ✅ FIX: Corrected Google Maps Link Format
                   <a 
-                    href={`http://maps.google.com/?q=${r.LATITUDE},${r.LONGITUDE}`} 
+                    href={`https://www.google.com/maps/search/?api=1&query=${r.LATITUDE},${r.LONGITUDE}`} 
                     target="_blank" 
                     rel="noreferrer"
                     className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"

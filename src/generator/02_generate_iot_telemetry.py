@@ -250,30 +250,38 @@ def sample_rental_duration(max_days: int) -> int:
 # TIME WINDOWS (70% NO DRIVING IN 04–08 & 14–16)
 # ============================================================
 
-def build_allowed_windows_for_day():
+def build_allowed_windows_for_day(min_start_dt: datetime | None = None):
     """
-    Retourne une liste de fenêtres horaires (start_h, end_h) dans
-    lesquelles on PEUT démarrer un trajet ce jour-là.
-    - Hard window : [DAY_START_HOUR, DAY_END_HOUR]
-    - 70% des jours : on évite 04–08 et 14–16.
+    Allowed start windows for a day.
+    - Hard window: [DAY_START_HOUR, DAY_END_HOUR]
+    - 70% of days: avoid 04–08 and 14–16
+    - If min_start_dt is given (day 0), force earliest start >= min_start_dt
     """
     base_start = DAY_START_HOUR
     base_end = DAY_END_HOUR
 
-    avoid = random.random() < PROB_AVOID_FORBIDDEN
+    # ✅ day-0 override: start from "now+5min"
+    if min_start_dt is not None:
+        min_h = min_start_dt.hour + (min_start_dt.minute / 60.0)
+        base_start = max(0.0, min_h)          # allow night driving day-0
+        base_end = DAY_END_HOUR
 
+        if base_start >= base_end:
+            return [(DAY_START_HOUR, DAY_END_HOUR)]
+        # day-0: don’t apply forbidden windows to guarantee activity
+        return [(base_start, base_end)]
+
+    # normal days (your existing behavior)
+    avoid = random.random() < PROB_AVOID_FORBIDDEN
     if not avoid:
         return [(base_start, base_end)]
 
     windows = []
-
-    # Segment 1 : [8, 14]
     seg1_start = max(base_start, 8)
     seg1_end = min(base_end, 14)
     if seg1_start < seg1_end:
         windows.append((seg1_start, seg1_end))
 
-    # Segment 2 : [16, 21]
     seg2_start = max(base_start, 16)
     seg2_end = base_end
     if seg2_start < seg2_end:
@@ -656,7 +664,11 @@ def simulate_car_for_period(car_row, start_dt, days_forward):
             if trips_today == 0:
                 continue
 
-            windows = build_allowed_windows_for_day()
+            # ✅ day 0: allow starts from start_dt (so you get activity right away)
+            if day == start_dt.date():
+                windows = build_allowed_windows_for_day(min_start_dt=start_dt)
+            else:
+                windows = build_allowed_windows_for_day()
 
             for _ in range(trips_today):
                 start_minute = sample_start_minute_from_windows(windows)
