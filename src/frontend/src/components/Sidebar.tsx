@@ -52,14 +52,12 @@ type NavItem = { to: string; icon: any; label: string; onlySupervisor?: boolean 
 // ✅ UPDATED CONFIGURATION
 const NAV: NavItem[] = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/live", icon: Radio, label: "Live Monitor" },
-  // ✅ ADDED onlySupervisor: true to Branches
-  { to: "/branches", icon: MapPin, label: "Locations", onlySupervisor: true }, 
-  // ✅ Managers is already onlySupervisor: true
+    { to: "/branches", icon: MapPin, label: "Locations", onlySupervisor: true }, 
   { to: "/managers", icon: Users, label: "Managers", onlySupervisor: true }, 
   { to: "/devices", icon: Cpu, label: "IoT Status" },
   { to: "/cars", icon: Car, label: "Fleet" },
   { to: "/rentals", icon: ClipboardList, label: "Rentals" },
+  { to: "/live", icon: Radio, label: "Live Monitor" },
   { to: "/alerts", icon: Bell, label: "Alerts" },
   { to: "/telemetry", icon: Activity, label: "History" },
 ];
