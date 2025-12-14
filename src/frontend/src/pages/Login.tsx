@@ -1,3 +1,4 @@
+// ✅ FIX: src/frontend/src/pages/Login.tsx (works with new AuthContext.login(email,password))
 import React, { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Shield, Loader2, Eye, EyeOff, Lock, Mail } from "lucide-react";
@@ -24,10 +25,8 @@ export function LoginPage() {
 
     try {
       await login(email.trim(), password);
-      // Navigate to the page they tried to visit or dashboard
       navigate(from, { replace: true });
     } catch (err: any) {
-      console.error("Login Failed:", err);
       setError(err?.message || "Invalid credentials");
     } finally {
       setLoading(false);
@@ -38,29 +37,27 @@ export function LoginPage() {
 
   return (
     <div className="relative min-h-screen flex items-center justify-center bg-[#09090b] p-6 overflow-hidden selection:bg-indigo-500/30">
-      
-      {/* Ambient Background Effects */}
       <div className="absolute top-[-10%] left-[-10%] h-[500px] w-[500px] rounded-full bg-indigo-600/20 blur-[120px]" />
       <div className="absolute bottom-[-10%] right-[-10%] h-[500px] w-[500px] rounded-full bg-violet-600/10 blur-[120px]" />
 
       <div className="relative w-full max-w-md">
-        {/* Glass Card with Entrance Animation */}
         <div className="rounded-[32px] border border-white/10 bg-[#121212]/80 backdrop-blur-xl shadow-2xl p-8 sm:p-10 animate-in zoom-in-95 fade-in duration-500">
-          
           <div className="mb-8 text-center">
             <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/20">
               <Shield className="h-7 w-7 text-white" fill="currentColor" fillOpacity={0.2} />
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-white">Welcome back</h1>
             <p className="mt-2 text-sm text-neutral-400">
-              Enter your credentials to access the <br /> 
+              Enter your credentials to access the <br />
               <span className="text-indigo-400 font-medium">Fleet Command Center</span>.
             </p>
           </div>
 
           <form onSubmit={onSubmit} className="space-y-5">
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold uppercase tracking-wider text-neutral-500 ml-1">Email Address</label>
+              <label className="text-xs font-semibold uppercase tracking-wider text-neutral-500 ml-1">
+                Email Address
+              </label>
               <div className="relative group">
                 <Mail className="absolute left-4 top-3.5 h-5 w-5 text-neutral-500 group-focus-within:text-white transition-colors" />
                 <input
@@ -75,7 +72,9 @@ export function LoginPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold uppercase tracking-wider text-neutral-500 ml-1">Password</label>
+              <label className="text-xs font-semibold uppercase tracking-wider text-neutral-500 ml-1">
+                Password
+              </label>
               <div className="relative group">
                 <Lock className="absolute left-4 top-3.5 h-5 w-5 text-neutral-500 group-focus-within:text-white transition-colors" />
                 <input
@@ -116,9 +115,7 @@ export function LoginPage() {
           </form>
 
           <div className="mt-8 border-t border-white/5 pt-6 text-center">
-            <p className="text-xs text-neutral-600">
-              Restricted access. Authorized personnel only.
-            </p>
+            <p className="text-xs text-neutral-600">Restricted access. Authorized personnel only.</p>
           </div>
         </div>
       </div>

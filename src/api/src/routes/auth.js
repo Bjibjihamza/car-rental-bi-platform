@@ -1,13 +1,24 @@
-// src/api/src/routes/auth.js
+// ✅ FIX: src/api/src/routes/auth.js  (bcrypt login + keeps your /me + profile update + password change)
 const express = require("express");
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 const { getConnection } = require("../db");
+const { authMiddleware } = require("../authMiddleware");
 
 const router = express.Router();
 
+function signUser(payload) {
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || "8h",
+  });
+}
+
+function normalizeRole(dbRole) {
+  return String(dbRole).toUpperCase() === "SUPERVISOR" ? "supervisor" : "manager";
+}
+
 router.post("/login", async (req, res) => {
   const { email, password } = req.body ?? {};
-
   if (!email || !password) {
     return res.status(400).json({ message: "email and password are required" });
   }
@@ -24,6 +35,7 @@ router.post("/login", async (req, res) => {
         FIRST_NAME,
         LAST_NAME,
         EMAIL,
+        PHONE,
         MANAGER_PASSWORD,
         BRANCH_ID,
         ROLE
@@ -34,51 +46,195 @@ router.post("/login", async (req, res) => {
     );
 
     const row = r.rows?.[0];
-    if (!row) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
+    if (!row) return res.status(401).json({ message: "Invalid credentials" });
 
-    // Support both OBJECT and ARRAY row formats
     const get = (key, idx) =>
       row && typeof row === "object" && !Array.isArray(row) ? row[key] : row[idx];
 
-    const managerId   = get("MANAGER_ID", 0);
+    const managerId = get("MANAGER_ID", 0);
     const managerCode = get("MANAGER_CODE", 1);
-    const firstName   = get("FIRST_NAME", 2);
-    const lastName    = get("LAST_NAME", 3);
-    const emailDb     = get("EMAIL", 4);
-    const storedPwd   = String(get("MANAGER_PASSWORD", 5) || "").trim();
-    const branchId    = get("BRANCH_ID", 6);
-    const dbRole      = get("ROLE", 7);
+    const firstName = get("FIRST_NAME", 2);
+    const lastName = get("LAST_NAME", 3);
+    const emailDb = get("EMAIL", 4);
+    const phoneDb = get("PHONE", 5);
+    const storedPwd = String(get("MANAGER_PASSWORD", 6) || "").trim();
+    const branchId = get("BRANCH_ID", 7);
+    const dbRole = get("ROLE", 8);
 
-    // 🔴 PLAINTEXT PASSWORD CHECK (DEV ONLY)
-    if (String(password).trim() !== storedPwd) {
-      return res.status(401).json({ message: "Invalid credentials" });
+    // ✅ Accept BOTH: bcrypt hash OR old plaintext (for backward compatibility)
+    let ok = false;
+    if (storedPwd.startsWith("$2a$") || storedPwd.startsWith("$2b$") || storedPwd.startsWith("$2y$")) {
+      ok = await bcrypt.compare(String(password), storedPwd);
+    } else {
+      ok = String(password).trim() === storedPwd;
     }
 
-    // Normalize role for frontend
-    const role =
-      String(dbRole).toUpperCase() === "SUPERVISOR"
-        ? "supervisor"
-        : "manager";
+    if (!ok) return res.status(401).json({ message: "Invalid credentials" });
 
     const payload = {
       managerId,
       managerCode,
       email: emailDb,
+      phone: phoneDb ?? null,
       firstName,
       lastName,
       branchId: branchId ?? null,
-      role,
+      role: normalizeRole(dbRole),
     };
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRES_IN || "8h",
-    });
-
+    const token = signUser(payload);
     return res.json({ token, user: payload });
   } catch (err) {
     console.error("LOGIN_ERROR:", err);
+    return res.status(500).json({ message: "Server error" });
+  } finally {
+    try { if (conn) await conn.close(); } catch {}
+  }
+});
+
+/* ===============================
+   GET CURRENT USER (ME)
+================================ */
+router.get("/me", authMiddleware, async (req, res) => {
+  return res.json({ user: req.user });
+});
+
+/* ===============================
+   UPDATE PROFILE (NAME/EMAIL/PHONE)
+   Returns NEW TOKEN + USER
+================================ */
+router.put("/me", authMiddleware, async (req, res) => {
+  const { firstName, lastName, email, phone } = req.body ?? {};
+  const managerId = req?.user?.managerId;
+
+  if (!managerId) return res.status(401).json({ message: "Invalid token" });
+  if (!firstName || !lastName || !email) {
+    return res.status(400).json({ message: "firstName, lastName, email are required" });
+  }
+
+  let conn;
+  try {
+    conn = await getConnection();
+
+    const chk = await conn.execute(
+      `SELECT 1 FROM MANAGERS WHERE LOWER(EMAIL)=LOWER(:email) AND MANAGER_ID <> :id`,
+      { email, id: managerId }
+    );
+    if ((chk.rows || []).length > 0) {
+      return res.status(409).json({ message: "Email already used by another account" });
+    }
+
+    await conn.execute(
+      `
+      UPDATE MANAGERS
+      SET FIRST_NAME = :firstName,
+          LAST_NAME  = :lastName,
+          EMAIL      = :email,
+          PHONE      = :phone
+      WHERE MANAGER_ID = :id
+      `,
+      {
+        firstName: String(firstName).trim(),
+        lastName: String(lastName).trim(),
+        email: String(email).trim(),
+        phone: phone ? String(phone).trim() : null,
+        id: managerId,
+      },
+      { autoCommit: true }
+    );
+
+    const r = await conn.execute(
+      `
+      SELECT
+        MANAGER_ID,
+        MANAGER_CODE,
+        FIRST_NAME,
+        LAST_NAME,
+        EMAIL,
+        PHONE,
+        BRANCH_ID,
+        ROLE
+      FROM MANAGERS
+      WHERE MANAGER_ID = :id
+      `,
+      { id: managerId }
+    );
+
+    const row = r.rows?.[0];
+    if (!row) return res.status(404).json({ message: "User not found" });
+
+    const get = (key, idx) =>
+      row && typeof row === "object" && !Array.isArray(row) ? row[key] : row[idx];
+
+    const payload = {
+      managerId: get("MANAGER_ID", 0),
+      managerCode: get("MANAGER_CODE", 1),
+      firstName: get("FIRST_NAME", 2),
+      lastName: get("LAST_NAME", 3),
+      email: get("EMAIL", 4),
+      phone: get("PHONE", 5) ?? null,
+      branchId: get("BRANCH_ID", 6) ?? null,
+      role: normalizeRole(get("ROLE", 7)),
+    };
+
+    const token = signUser(payload);
+    return res.json({ token, user: payload });
+  } catch (err) {
+    console.error("PROFILE_UPDATE_ERROR:", err);
+    return res.status(500).json({ message: "Server error" });
+  } finally {
+    try { if (conn) await conn.close(); } catch {}
+  }
+});
+
+/* ===============================
+   CHANGE PASSWORD (bcrypt)
+================================ */
+router.put("/me/password", authMiddleware, async (req, res) => {
+  const managerId = req?.user?.managerId;
+  const { currentPassword, newPassword } = req.body ?? {};
+
+  if (!managerId) return res.status(401).json({ message: "Invalid token" });
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ message: "currentPassword and newPassword are required" });
+  }
+  if (String(newPassword).trim().length < 6) {
+    return res.status(400).json({ message: "New password must be at least 6 characters" });
+  }
+
+  let conn;
+  try {
+    conn = await getConnection();
+
+    const r = await conn.execute(
+      `SELECT MANAGER_PASSWORD FROM MANAGERS WHERE MANAGER_ID = :id`,
+      { id: managerId }
+    );
+    const row = r.rows?.[0];
+    if (!row) return res.status(404).json({ message: "User not found" });
+
+    const storedPwd = String(row.MANAGER_PASSWORD || "").trim();
+
+    let ok = false;
+    if (storedPwd.startsWith("$2a$") || storedPwd.startsWith("$2b$") || storedPwd.startsWith("$2y$")) {
+      ok = await bcrypt.compare(String(currentPassword), storedPwd);
+    } else {
+      ok = String(currentPassword).trim() === storedPwd;
+    }
+
+    if (!ok) return res.status(401).json({ message: "Current password is incorrect" });
+
+    const hash = await bcrypt.hash(String(newPassword), 10);
+
+    await conn.execute(
+      `UPDATE MANAGERS SET MANAGER_PASSWORD = :pwd WHERE MANAGER_ID = :id`,
+      { pwd: hash, id: managerId },
+      { autoCommit: true }
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("PASSWORD_UPDATE_ERROR:", err);
     return res.status(500).json({ message: "Server error" });
   } finally {
     try { if (conn) await conn.close(); } catch {}

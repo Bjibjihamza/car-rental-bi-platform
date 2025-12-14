@@ -13,7 +13,8 @@ const TITLES: Record<string, { title: string; subtitle?: string }> = {
   "/alerts": { title: "Alerts", subtitle: "Incidents & notifications" },
   "/telemetry": { title: "Telemetry", subtitle: "Events stream & metrics" },
   "/managers": { title: "Managers", subtitle: "Admin management" },
-  "/profile": { title: "Profile", subtitle: "Your account & access details" }, // ✅ NEW
+  "/live": { title: "Live Monitor", subtitle: "Real-time vehicle status" },
+  "/profile": { title: "Profile", subtitle: "Account & security settings" },
 };
 
 function formatDate() {
@@ -31,7 +32,7 @@ function initials(first?: string, last?: string) {
 export function Topbar() {
   const { user, logout } = useAuth();
   const location = useLocation();
-  const navigate = useNavigate(); // ✅ NEW
+  const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
 
   const pageMeta = useMemo(() => {
@@ -42,7 +43,6 @@ export function Topbar() {
   return (
     <header className="sticky top-0 z-40 w-full border-b border-white/5 bg-[#09090b]/80 backdrop-blur-xl transition-all">
       <div className="flex items-center justify-between px-6 py-4 lg:px-8">
-
         {/* LEFT: Page Title & Breadcrumbs */}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3">
@@ -59,7 +59,6 @@ export function Topbar() {
 
         {/* RIGHT: Actions */}
         <div className="flex items-center gap-4">
-
           {/* 1. Search Bar (Glassy) */}
           <div className="hidden md:flex group relative items-center">
             <Search className="absolute left-3 h-4 w-4 text-neutral-500 group-focus-within:text-indigo-400 transition" />
@@ -102,25 +101,22 @@ export function Topbar() {
                 </div>
               </div>
 
-              <ChevronDown className={`h-4 w-4 text-neutral-500 transition-transform duration-200 ${menuOpen ? "rotate-180" : ""}`} />
+              <ChevronDown
+                className={`h-4 w-4 text-neutral-500 transition-transform duration-200 ${
+                  menuOpen ? "rotate-180" : ""
+                }`}
+              />
             </button>
 
-            {/* Dropdown Menu */}
             {menuOpen && (
               <>
-                <div
-                  className="fixed inset-0 z-40"
-                  onClick={() => setMenuOpen(false)}
-                />
+                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
                 <div className="absolute right-0 top-full z-50 mt-2 w-56 origin-top-right rounded-2xl border border-white/10 bg-[#121212] p-1.5 shadow-xl shadow-black/50 ring-1 ring-black/5 animate-in fade-in zoom-in-95 duration-100">
-
-                  {/* User Header in Menu */}
                   <div className="px-3 py-3 border-b border-white/5 mb-1">
                     <p className="text-sm font-medium text-white">Signed in as</p>
                     <p className="truncate text-xs text-neutral-400">{user?.email}</p>
                   </div>
 
-                  {/* Menu Items */}
                   <div className="space-y-0.5">
                     <button
                       onClick={() => {
@@ -131,13 +127,9 @@ export function Topbar() {
                     >
                       <User className="h-4 w-4" /> Profile
                     </button>
-
                     <button
-                      onClick={() => {
-                        setMenuOpen(false);
-                        // navigate("/settings"); // if you create it later
-                      }}
                       className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-neutral-300 hover:bg-white/5 hover:text-white transition"
+                      onClick={() => setMenuOpen(false)}
                     >
                       <Settings className="h-4 w-4" /> Settings
                     </button>
@@ -155,7 +147,6 @@ export function Topbar() {
               </>
             )}
           </div>
-
         </div>
       </div>
     </header>

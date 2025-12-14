@@ -1,148 +1,209 @@
+// ✅ src/api/src/routes/devices.js
 const express = require("express");
-const router = express.Router();
+const oracledb = require("oracledb");
 const { getConnection } = require("../db");
 const { authMiddleware } = require("../authMiddleware");
 const { isSupervisor, requireBranch } = require("../access");
-const oracledb = require("oracledb");
 
-// 1. GET AVAILABLE DEVICES (For Dropdowns)
-// Managers should only see devices available in THEIR branch or unassigned global ones?
-// For simplicity, let's keep this open or filter if strict inventory is needed.
-router.get('/available', authMiddleware, async (req, res) => {
+const router = express.Router();
+
+/* ===============================
+   LIST DEVICES (Supervisor: all | Manager: own branch)
+   (keeps your extra fields: assignment + branch name/city + installed)
+================================ */
+router.get("/", authMiddleware, async (req, res) => {
+  const sup = isSupervisor(req);
+  const branchId = sup ? null : requireBranch(req);
+
   let conn;
   try {
     conn = await getConnection();
-    
-    let sql = `
-      SELECT DEVICE_ID, DEVICE_CODE, STATUS 
-      FROM IOT_DEVICES 
-      WHERE STATUS = 'INACTIVE' 
-      AND DEVICE_ID NOT IN (SELECT DEVICE_ID FROM CARS WHERE DEVICE_ID IS NOT NULL)
-    `;
 
     const binds = {};
-
-    // OPTIONAL: Filter available devices by branch if strict inventory
-    if (!isSupervisor(req)) {
-       sql += ` AND (BRANCH_ID = :branchId OR BRANCH_ID IS NULL)`;
-       binds.branchId = requireBranch(req);
+    let where = "";
+    if (!sup) {
+      where = `WHERE NVL(d.BRANCH_ID, -1) = :branchId`;
+      binds.branchId = Number(branchId);
     }
 
-    const r = await conn.execute(sql, binds);
-    res.json(r.rows || []);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server Error" });
-  } finally {
-    try { if (conn) await conn.close(); } catch {}
-  }
-});
+    const sql = `
+      SELECT
+        d.DEVICE_ID,
+        d.DEVICE_CODE,
+        d.DEVICE_IMEI,
+        d.FIRMWARE_VERSION,
+        d.STATUS,
+        d.ACTIVATED_AT,
+        d.LAST_SEEN_AT,
+        d.CREATED_AT,
 
-// 2. LIST DEVICES (Main Page - SCOPED)
-router.get("/", authMiddleware, async (req, res) => {
-  let conn;
-  try {
-    conn = await getConnection();
-    
-    // SMART QUERY with SCOPE
-    let sql = `
-      SELECT 
-        d.DEVICE_ID, 
-        d.DEVICE_CODE, 
-        d.DEVICE_IMEI, 
-        d.FIRMWARE_VERSION, 
-        d.STATUS, 
-        d.ACTIVATED_AT, 
-        d.LAST_SEEN_AT, 
-        d.CREATED_AT, 
-        
-        -- Car Assignment Info
         c.CAR_ID,
         c.LICENSE_PLATE,
         c.MAKE,
         c.MODEL,
 
-        -- Location Logic
-        COALESCE(b_car.BRANCH_ID, b_dev.BRANCH_ID) as ACTUAL_BRANCH_ID,
-        COALESCE(b_car.BRANCH_NAME, b_dev.BRANCH_NAME) as BRANCH_NAME,
-        COALESCE(b_car.CITY, b_dev.CITY) as BRANCH_CITY,
-        
-        CASE WHEN c.CAR_ID IS NOT NULL THEN 1 ELSE 0 END as IS_INSTALLED
-
+        NVL(c.BRANCH_ID, d.BRANCH_ID) AS ACTUAL_BRANCH_ID,
+        b.BRANCH_NAME,
+        b.CITY AS BRANCH_CITY,
+        CASE WHEN c.CAR_ID IS NULL THEN 0 ELSE 1 END AS IS_INSTALLED
       FROM IOT_DEVICES d
-      LEFT JOIN CARS c ON d.DEVICE_ID = c.DEVICE_ID
-      LEFT JOIN BRANCHES b_car ON c.BRANCH_ID = b_car.BRANCH_ID  -- Branch via Car
-      LEFT JOIN BRANCHES b_dev ON d.BRANCH_ID = b_dev.BRANCH_ID  -- Branch via Device
+      LEFT JOIN CARS c ON c.DEVICE_ID = d.DEVICE_ID
+      LEFT JOIN BRANCHES b ON b.BRANCH_ID = NVL(c.BRANCH_ID, d.BRANCH_ID)
+      ${where}
+      ORDER BY d.DEVICE_ID DESC
     `;
 
-    const binds = {};
-
-    // ✅ KEY CHANGE: Filter for Managers
-    if (!isSupervisor(req)) {
-      // Logic: Show device if it is assigned to my branch (inventory) OR installed in a car of my branch
-      sql += ` WHERE (d.BRANCH_ID = :branchId OR c.BRANCH_ID = :branchId)`;
-      binds.branchId = requireBranch(req);
-    }
-
-    sql += ` ORDER BY d.DEVICE_ID DESC`;
-    
     const r = await conn.execute(sql, binds);
-    res.json(r.rows || []);
+    return res.json(r.rows || []);
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: e.message || "Failed to fetch devices" });
+    console.error("DEVICES_GET_ERROR:", e);
+    return res.status(500).json({ message: e.message });
   } finally {
     try { if (conn) await conn.close(); } catch {}
   }
 });
 
-// 3. CREATE DEVICE (Supervisor Only)
+/* ===============================
+   CREATE DEVICE
+   - Supervisor: can set any BRANCH_ID (or null)
+   - Manager: forced to his branch (cannot create for another)
+================================ */
 router.post("/", authMiddleware, async (req, res) => {
-  if (!isSupervisor(req)) return res.status(403).json({ message: "Supervisor only" });
+  const sup = isSupervisor(req);
+  const userBranchId = sup ? null : requireBranch(req);
 
   const { DEVICE_CODE, DEVICE_IMEI, FIRMWARE_VERSION, STATUS, BRANCH_ID } = req.body || {};
-  if (!String(DEVICE_CODE || "").trim()) return res.status(400).json({ message: "Device Code is required" });
+
+  if (!DEVICE_CODE) return res.status(400).json({ message: "DEVICE_CODE is required" });
+
+  const status = String(STATUS || "INACTIVE").toUpperCase();
+  if (!["ACTIVE", "INACTIVE", "RETIRED"].includes(status)) {
+    return res.status(400).json({ message: "Invalid STATUS" });
+  }
+
+  const branchIdToUse = sup
+    ? (BRANCH_ID ? Number(BRANCH_ID) : null)
+    : Number(userBranchId);
 
   let conn;
   try {
     conn = await getConnection();
+
     const sql = `
-      INSERT INTO IOT_DEVICES (DEVICE_CODE, DEVICE_IMEI, FIRMWARE_VERSION, STATUS, BRANCH_ID)
-      VALUES (:code, :imei, :fw, :status, :branchId)
+      INSERT INTO IOT_DEVICES (
+        DEVICE_CODE, DEVICE_IMEI, FIRMWARE_VERSION, STATUS, BRANCH_ID, CREATED_AT
+      )
+      VALUES (
+        :code, :imei, :fw, :status, :branchId, SYSTIMESTAMP
+      )
       RETURNING DEVICE_ID INTO :id
     `;
+
     const binds = {
       code: String(DEVICE_CODE).trim(),
       imei: DEVICE_IMEI ? String(DEVICE_IMEI).trim() : null,
       fw: FIRMWARE_VERSION ? String(FIRMWARE_VERSION).trim() : null,
-      status: STATUS || 'INACTIVE',
-      branchId: BRANCH_ID ? Number(BRANCH_ID) : null,
-      id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }
+      status,
+      branchId: branchIdToUse,
+      id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
     };
 
     const r = await conn.execute(sql, binds, { autoCommit: true });
-    res.json({ DEVICE_ID: r.outBinds.id[0], message: "Device registered" });
+    return res.json({ DEVICE_ID: r.outBinds.id[0], message: "Device created" });
   } catch (e) {
-    console.error(e);
-    if (e.message && e.message.includes("ORA-00001")) return res.status(409).json({ message: "Device Code or IMEI already exists" });
-    res.status(500).json({ message: "Failed to create device" });
+    console.error("DEVICES_POST_ERROR:", e);
+    if (String(e.message || "").includes("ORA-00001")) {
+      return res.status(409).json({ message: "Device code or IMEI already exists" });
+    }
+    return res.status(500).json({ message: e.message });
   } finally {
     try { if (conn) await conn.close(); } catch {}
   }
 });
 
-// 4. EDIT DEVICE (Supervisor Only)
-router.put("/:id", authMiddleware, async (req, res) => {
-  if (!isSupervisor(req)) return res.status(403).json({ message: "Supervisor only" });
 
-  const deviceId = req.params.id;
-  const { DEVICE_CODE, DEVICE_IMEI, FIRMWARE_VERSION, STATUS, BRANCH_ID } = req.body || {};
+// GET /api/v1/devices/available
+// Supervisor: all unassigned devices (optionally filter by branchId)
+// Manager: only unassigned devices in his branch
+router.get("/available", authMiddleware, async (req, res) => {
+  const sup = isSupervisor(req);
+  const userBranchId = sup ? null : requireBranch(req);
 
   let conn;
   try {
     conn = await getConnection();
+
+    const binds = {};
+    let where = `
+      WHERE d.STATUS <> 'RETIRED'
+        AND NOT EXISTS (SELECT 1 FROM CARS c WHERE c.DEVICE_ID = d.DEVICE_ID)
+    `;
+
+    // manager forced branch
+    if (!sup) {
+      where += ` AND NVL(d.BRANCH_ID, -1) = :bid`;
+      binds.bid = Number(userBranchId);
+    } else if (req.query.branchId) {
+      where += ` AND NVL(d.BRANCH_ID, -1) = :bid`;
+      binds.bid = Number(req.query.branchId);
+    }
+
     const sql = `
-      UPDATE IOT_DEVICES 
+      SELECT d.DEVICE_ID, d.DEVICE_CODE
+      FROM IOT_DEVICES d
+      ${where}
+      ORDER BY d.DEVICE_CODE
+    `;
+
+    const r = await conn.execute(sql, binds);
+    res.json(r.rows || []);
+  } catch (e) {
+    console.error("DEVICES_AVAILABLE_ERROR:", e);
+    res.status(500).json({ message: e.message });
+  } finally {
+    try { if (conn) await conn.close(); } catch {}
+  }
+});
+
+
+/* ===============================
+   UPDATE DEVICE
+   - Supervisor: can update anything + move branch
+   - Manager: can update but cannot change BRANCH_ID (forced to own)
+================================ */
+router.put("/:id", authMiddleware, async (req, res) => {
+  const sup = isSupervisor(req);
+  const userBranchId = sup ? null : requireBranch(req);
+
+  const deviceId = Number(req.params.id);
+  const { DEVICE_CODE, DEVICE_IMEI, FIRMWARE_VERSION, STATUS, BRANCH_ID } = req.body || {};
+
+  const status = String(STATUS || "INACTIVE").toUpperCase();
+  if (!["ACTIVE", "INACTIVE", "RETIRED"].includes(status)) {
+    return res.status(400).json({ message: "Invalid STATUS" });
+  }
+
+  const branchIdToUse = sup
+    ? (BRANCH_ID ? Number(BRANCH_ID) : null)
+    : Number(userBranchId);
+
+  let conn;
+  try {
+    conn = await getConnection();
+
+    // Manager can only edit devices in his branch
+    if (!sup) {
+      const chk = await conn.execute(
+        `SELECT 1 FROM IOT_DEVICES WHERE DEVICE_ID = :id AND NVL(BRANCH_ID, -1) = :branchId`,
+        { id: deviceId, branchId: Number(userBranchId) }
+      );
+      if ((chk.rows || []).length === 0) {
+        return res.status(403).json({ message: "Forbidden: not in your branch" });
+      }
+    }
+
+    const sql = `
+      UPDATE IOT_DEVICES
       SET DEVICE_CODE = :code,
           DEVICE_IMEI = :imei,
           FIRMWARE_VERSION = :fw,
@@ -150,38 +211,61 @@ router.put("/:id", authMiddleware, async (req, res) => {
           BRANCH_ID = :branchId
       WHERE DEVICE_ID = :id
     `;
+
     const binds = {
       id: deviceId,
-      code: String(DEVICE_CODE).trim(),
-      imei: DEVICE_IMEI || null,
-      fw: FIRMWARE_VERSION || null,
-      status: STATUS || 'INACTIVE',
-      branchId: BRANCH_ID ? Number(BRANCH_ID) : null
+      code: String(DEVICE_CODE || "").trim(),
+      imei: DEVICE_IMEI ? String(DEVICE_IMEI).trim() : null,
+      fw: FIRMWARE_VERSION ? String(FIRMWARE_VERSION).trim() : null,
+      status,
+      branchId: branchIdToUse,
     };
 
     const r = await conn.execute(sql, binds, { autoCommit: true });
     if (r.rowsAffected === 0) return res.status(404).json({ message: "Device not found" });
-    res.json({ message: "Device updated" });
+
+    return res.json({ message: "Device updated" });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: "Failed to update device" });
+    console.error("DEVICES_PUT_ERROR:", e);
+    if (String(e.message || "").includes("ORA-00001")) {
+      return res.status(409).json({ message: "Device code or IMEI already exists" });
+    }
+    return res.status(500).json({ message: e.message });
   } finally {
     try { if (conn) await conn.close(); } catch {}
   }
 });
 
-// 5. DELETE DEVICE
+/* ===============================
+   DELETE DEVICE (Supervisor only)
+================================ */
 router.delete("/:id", authMiddleware, async (req, res) => {
   if (!isSupervisor(req)) return res.status(403).json({ message: "Supervisor only" });
+
+  const deviceId = Number(req.params.id);
   let conn;
   try {
     conn = await getConnection();
-    const r = await conn.execute(`DELETE FROM IOT_DEVICES WHERE DEVICE_ID = :id`, { id: req.params.id }, { autoCommit: true });
+
+    const chk = await conn.execute(
+      `SELECT 1 FROM CARS WHERE DEVICE_ID = :id`,
+      { id: deviceId }
+    );
+    if ((chk.rows || []).length > 0) {
+      return res.status(400).json({ message: "Cannot delete: device is assigned to a car" });
+    }
+
+    const r = await conn.execute(
+      `DELETE FROM IOT_DEVICES WHERE DEVICE_ID = :id`,
+      { id: deviceId },
+      { autoCommit: true }
+    );
+
     if (r.rowsAffected === 0) return res.status(404).json({ message: "Device not found" });
-    res.json({ message: "Device deleted" });
+    return res.json({ message: "Device deleted" });
   } catch (e) {
-    if (e.message && e.message.includes("ORA-02292")) return res.status(400).json({ message: "Cannot delete: Device linked to car." });
-    res.status(500).json({ message: "Failed to delete" });
+    console.error("DEVICES_DELETE_ERROR:", e);
+    return res.status(500).json({ message: e.message });
   } finally {
     try { if (conn) await conn.close(); } catch {}
   }
