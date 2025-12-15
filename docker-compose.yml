@@ -51,7 +51,7 @@ services:
       PORT: "8000"
       FRONTEND_ORIGIN: "http://localhost:5173"
       JWT_SECRET: "supersecret_dev_only"
-      JWT_EXPIRES_IN: "8h"
+      JWT_EXPIRES_IN: "7d"
     ports:
       - "8000:8000"
     networks:

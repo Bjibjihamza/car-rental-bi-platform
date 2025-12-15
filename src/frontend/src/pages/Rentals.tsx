@@ -4,7 +4,7 @@ import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { Badge } from "../components/Badge";
 import { Link } from "react-router-dom";
-import { RefreshCw, FileText } from "lucide-react";
+import { RefreshCw, FileText, Plus } from "lucide-react";
 
 type RentalRow = {
   RENTAL_ID: number;
@@ -66,6 +66,7 @@ export function RentalsPage() {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const filtered = useMemo(() => {
@@ -92,12 +93,21 @@ export function RentalsPage() {
         subtitle="Click details to view rental report"
         right={
           <div className="flex gap-2">
+            <Link
+              to="/rentals/new"
+              className="h-9 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 text-sm font-bold text-white hover:bg-indigo-500"
+            >
+              <Plus size={16} />
+              New
+            </Link>
+
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search..."
               className="h-9 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
             />
+
             <button
               onClick={load}
               className="h-9 w-9 grid place-items-center rounded-lg bg-white/5 border border-white/10 text-neutral-400 hover:text-white"
@@ -111,11 +121,7 @@ export function RentalsPage() {
           loading={loading}
           rows={filtered}
           cols={[
-            {
-              key: "id",
-              header: "ID",
-              render: (r) => `#${r.RENTAL_ID}`,
-            },
+            { key: "id", header: "ID", render: (r) => `#${r.RENTAL_ID}` },
             {
               key: "car",
               header: "Vehicle",
@@ -124,17 +130,14 @@ export function RentalsPage() {
                   <div className="font-bold text-white">
                     {r.MAKE} {r.MODEL}
                   </div>
-                  <div className="text-xs text-neutral-400">
-                    {r.LICENSE_PLATE}
-                  </div>
+                  <div className="text-xs text-neutral-400">{r.LICENSE_PLATE}</div>
                 </div>
               ),
             },
             {
               key: "customer",
               header: "Customer",
-              render: (r) =>
-                `${r.CUSTOMER_FIRST_NAME} ${r.CUSTOMER_LAST_NAME}`,
+              render: (r) => `${r.CUSTOMER_FIRST_NAME} ${r.CUSTOMER_LAST_NAME}`,
             },
             {
               key: "status",
@@ -155,11 +158,7 @@ export function RentalsPage() {
                 </div>
               ),
             },
-            {
-              key: "total",
-              header: "Total",
-              render: (r) => money(r.TOTAL_AMOUNT, r.CURRENCY),
-            },
+            { key: "total", header: "Total", render: (r) => money(r.TOTAL_AMOUNT, r.CURRENCY) },
             {
               key: "actions",
               header: "",

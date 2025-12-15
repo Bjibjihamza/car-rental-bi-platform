@@ -56,6 +56,7 @@ const NAV: NavItem[] = [
   { to: "/managers", icon: Users, label: "Managers", onlySupervisor: true }, 
   { to: "/devices", icon: Cpu, label: "IoT Status" },
   { to: "/cars", icon: Car, label: "Fleet" },
+  { to: "/customers", icon: Users, label: "Customers" },
   { to: "/rentals", icon: ClipboardList, label: "Rentals" },
   { to: "/live", icon: Radio, label: "Live Monitor" },
   { to: "/alerts", icon: Bell, label: "Alerts" },

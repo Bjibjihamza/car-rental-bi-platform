@@ -9,7 +9,7 @@ const router = express.Router();
 
 function signUser(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || "8h",
+    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
   });
 }
 
@@ -17,6 +17,9 @@ function normalizeRole(dbRole) {
   return String(dbRole).toUpperCase() === "SUPERVISOR" ? "supervisor" : "manager";
 }
 
+// ===============================
+// LOGIN (bcrypt ONLY)
+// ===============================
 router.post("/login", async (req, res) => {
   const { email, password } = req.body ?? {};
   if (!email || !password) {
@@ -46,44 +49,35 @@ router.post("/login", async (req, res) => {
     );
 
     const row = r.rows?.[0];
-    if (!row) return res.status(401).json({ message: "Invalid credentials" });
+    if (!row) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
 
     const get = (key, idx) =>
       row && typeof row === "object" && !Array.isArray(row) ? row[key] : row[idx];
 
-    const managerId = get("MANAGER_ID", 0);
-    const managerCode = get("MANAGER_CODE", 1);
-    const firstName = get("FIRST_NAME", 2);
-    const lastName = get("LAST_NAME", 3);
-    const emailDb = get("EMAIL", 4);
-    const phoneDb = get("PHONE", 5);
-    const storedPwd = String(get("MANAGER_PASSWORD", 6) || "").trim();
-    const branchId = get("BRANCH_ID", 7);
-    const dbRole = get("ROLE", 8);
+    const storedHash = String(get("MANAGER_PASSWORD", 6) || "").trim();
 
-    // ✅ Accept BOTH: bcrypt hash OR old plaintext (for backward compatibility)
-    let ok = false;
-    if (storedPwd.startsWith("$2a$") || storedPwd.startsWith("$2b$") || storedPwd.startsWith("$2y$")) {
-      ok = await bcrypt.compare(String(password), storedPwd);
-    } else {
-      ok = String(password).trim() === storedPwd;
+    // 🔐 bcrypt ONLY
+    const ok = await bcrypt.compare(String(password), storedHash);
+    if (!ok) {
+      return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    if (!ok) return res.status(401).json({ message: "Invalid credentials" });
-
     const payload = {
-      managerId,
-      managerCode,
-      email: emailDb,
-      phone: phoneDb ?? null,
-      firstName,
-      lastName,
-      branchId: branchId ?? null,
-      role: normalizeRole(dbRole),
+      managerId: get("MANAGER_ID", 0),
+      managerCode: get("MANAGER_CODE", 1),
+      firstName: get("FIRST_NAME", 2),
+      lastName: get("LAST_NAME", 3),
+      email: get("EMAIL", 4),
+      phone: get("PHONE", 5) ?? null,
+      branchId: get("BRANCH_ID", 7) ?? null,
+      role: normalizeRole(get("ROLE", 8)),
     };
 
     const token = signUser(payload);
     return res.json({ token, user: payload });
+
   } catch (err) {
     console.error("LOGIN_ERROR:", err);
     return res.status(500).json({ message: "Server error" });
@@ -91,6 +85,7 @@ router.post("/login", async (req, res) => {
     try { if (conn) await conn.close(); } catch {}
   }
 });
+
 
 /* ===============================
    GET CURRENT USER (ME)
@@ -187,18 +182,20 @@ router.put("/me", authMiddleware, async (req, res) => {
   }
 });
 
-/* ===============================
-   CHANGE PASSWORD (bcrypt)
-================================ */
+// ===============================
+// CHANGE PASSWORD (bcrypt ONLY)
+// ===============================
 router.put("/me/password", authMiddleware, async (req, res) => {
   const managerId = req?.user?.managerId;
   const { currentPassword, newPassword } = req.body ?? {};
 
-  if (!managerId) return res.status(401).json({ message: "Invalid token" });
+  if (!managerId) {
+    return res.status(401).json({ message: "Invalid token" });
+  }
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ message: "currentPassword and newPassword are required" });
   }
-  if (String(newPassword).trim().length < 6) {
+  if (newPassword.length < 6) {
     return res.status(400).json({ message: "New password must be at least 6 characters" });
   }
 
@@ -210,29 +207,30 @@ router.put("/me/password", authMiddleware, async (req, res) => {
       `SELECT MANAGER_PASSWORD FROM MANAGERS WHERE MANAGER_ID = :id`,
       { id: managerId }
     );
+
     const row = r.rows?.[0];
-    if (!row) return res.status(404).json({ message: "User not found" });
-
-    const storedPwd = String(row.MANAGER_PASSWORD || "").trim();
-
-    let ok = false;
-    if (storedPwd.startsWith("$2a$") || storedPwd.startsWith("$2b$") || storedPwd.startsWith("$2y$")) {
-      ok = await bcrypt.compare(String(currentPassword), storedPwd);
-    } else {
-      ok = String(currentPassword).trim() === storedPwd;
+    if (!row) {
+      return res.status(404).json({ message: "User not found" });
     }
 
-    if (!ok) return res.status(401).json({ message: "Current password is incorrect" });
+    const storedHash = String(row.MANAGER_PASSWORD || "").trim();
 
-    const hash = await bcrypt.hash(String(newPassword), 10);
+    // 🔐 bcrypt ONLY
+    const ok = await bcrypt.compare(String(currentPassword), storedHash);
+    if (!ok) {
+      return res.status(401).json({ message: "Current password is incorrect" });
+    }
+
+    const newHash = await bcrypt.hash(String(newPassword), 12);
 
     await conn.execute(
       `UPDATE MANAGERS SET MANAGER_PASSWORD = :pwd WHERE MANAGER_ID = :id`,
-      { pwd: hash, id: managerId },
+      { pwd: newHash, id: managerId },
       { autoCommit: true }
     );
 
     return res.json({ ok: true });
+
   } catch (err) {
     console.error("PASSWORD_UPDATE_ERROR:", err);
     return res.status(500).json({ message: "Server error" });
@@ -240,5 +238,6 @@ router.put("/me/password", authMiddleware, async (req, res) => {
     try { if (conn) await conn.close(); } catch {}
   }
 });
+
 
 module.exports = router;

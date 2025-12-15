@@ -42,15 +42,12 @@ function safeNum(v) {
 }
 
 function pickRow(row, key, idx) {
-  // Oracle can return rows as OBJECT or ARRAY depending on outFormat.
   if (!row) return null;
   if (typeof row === "object" && !Array.isArray(row)) return row[key];
   return row[idx];
 }
 
-/**
- * Downsample route points to max N points.
- */
+/** Downsample route points to max N points. */
 function downsample(points, maxPoints) {
   if (!Array.isArray(points) || points.length <= maxPoints) return points || [];
   const step = Math.max(1, Math.floor(points.length / maxPoints));
@@ -59,10 +56,7 @@ function downsample(points, maxPoints) {
   return out;
 }
 
-/**
- * Build behavior metrics from telemetry points.
- * NOTE: thresholds are adjustable.
- */
+/** Build behavior metrics from telemetry points. */
 function buildReport(telemetry, options = {}) {
   const SPEEDING_KMH = options.SPEEDING_KMH ?? 120;
   const HARSH_BRAKE_BAR = options.HARSH_BRAKE_BAR ?? 65;
@@ -85,7 +79,6 @@ function buildReport(telemetry, options = {}) {
   let maxFuel = null;
   let endFuel = null;
 
-  // distance via odometer delta (best), fallback to GPS distance (approx)
   let firstOdo = null;
   let lastOdo = null;
 
@@ -152,7 +145,9 @@ function buildReport(telemetry, options = {}) {
   const distanceKm =
     firstOdo != null && lastOdo != null
       ? Math.max(0, lastOdo - firstOdo)
-      : (routePoints.length > 1 ? gpsDistanceKm : null);
+      : routePoints.length > 1
+      ? gpsDistanceKm
+      : null;
 
   return {
     metrics: {
@@ -173,10 +168,7 @@ function buildReport(telemetry, options = {}) {
 
 /* ================= ROUTES ================= */
 
-/**
- * GET /api/v1/rentals
- * Fetches rentals and checks if the linked car is currently active in the live feed.
- */
+/** GET /api/v1/rentals */
 router.get("/", authMiddleware, async (req, res) => {
   let conn;
   try {
@@ -199,16 +191,12 @@ router.get("/", authMiddleware, async (req, res) => {
         r.TOTAL_AMOUNT,
         r.CURRENCY,
         r.CREATED_AT,
-
-        -- Extra Display Fields
         b.CITY AS BRANCH_CITY,
         c.LICENSE_PLATE,
         c.MAKE,
         c.MODEL,
         cu.FIRST_NAME AS CUSTOMER_FIRST_NAME,
         cu.LAST_NAME  AS CUSTOMER_LAST_NAME,
-
-        -- [NEW] Real-Time Check: Is this car currently sending data?
         CASE 
           WHEN EXISTS (
             SELECT 1 FROM RT_IOT_FEED rt 
@@ -217,7 +205,6 @@ router.get("/", authMiddleware, async (req, res) => {
           ) THEN 1 
           ELSE 0 
         END AS IS_DRIVING
-
       FROM RENTALS r
       JOIN BRANCHES b ON b.BRANCH_ID = r.BRANCH_ID
       JOIN CARS c     ON c.CAR_ID = r.CAR_ID
@@ -241,14 +228,7 @@ router.get("/", authMiddleware, async (req, res) => {
   }
 });
 
-/**
- * ✅ NEW
- * GET /api/v1/rentals/:id/report
- * Behavior report based on telemetry during this rental.
- *
- * Query params:
- *  - sample=80 (max route points returned)
- */
+/** GET /api/v1/rentals/:id/report */
 router.get("/:id/report", authMiddleware, async (req, res) => {
   const rentalId = Number(req.params.id);
   const sample = Math.min(Math.max(Number(req.query.sample || 80), 10), 300);
@@ -257,7 +237,6 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
   try {
     conn = await getConnection();
 
-    // 1) Load rental with scope protection
     const binds = { id: rentalId };
     let rentalSql = `
       SELECT
@@ -292,8 +271,6 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
     const MAKE = pickRow(row, "MAKE", 6);
     const MODEL = pickRow(row, "MODEL", 7);
 
-    // 2) Load telemetry points in the rental window (from RT_IOT_FEED)
-    // NOTE: RT_IOT_FEED is a live buffer; for full reports use a history table.
     const telemetrySql = `
       SELECT
         rt.RECEIVED_AT,
@@ -315,14 +292,15 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
       ORDER BY rt.RECEIVED_AT ASC
     `;
 
-    const telemetryR = await conn.execute(
-      telemetrySql,
-      { carId: Number(CAR_ID), startAt: START_AT, endAt: END_AT }
-    );
+    const telemetryR = await conn.execute(telemetrySql, {
+      carId: Number(CAR_ID),
+      startAt: START_AT,
+      endAt: END_AT,
+    });
 
     const telemetry = (telemetryR.rows || []).map((r) => {
-      // Support both formats (object or array)
-      const get = (key, idx) => (r && typeof r === "object" && !Array.isArray(r) ? r[key] : r[idx]);
+      const get = (key, idx) =>
+        r && typeof r === "object" && !Array.isArray(r) ? r[key] : r[idx];
       return {
         RECEIVED_AT: get("RECEIVED_AT", 0),
         DEVICE_ID: get("DEVICE_ID", 1),
@@ -371,9 +349,7 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
   }
 });
 
-/**
- * POST /api/v1/rentals
- */
+/** POST /api/v1/rentals */
 router.post("/", authMiddleware, async (req, res) => {
   const user = req.user;
   const body = req.body || {};
@@ -384,9 +360,8 @@ router.post("/", authMiddleware, async (req, res) => {
   try {
     conn = await getConnection();
 
-    const branchId = user.role === "supervisor"
-      ? Number(body.BRANCH_ID)
-      : requireBranch(req);
+    const branchId =
+      user.role === "supervisor" ? Number(body.BRANCH_ID) : requireBranch(req);
 
     if (user.role === "supervisor" && !branchId) {
       return res.status(400).json({ message: "Missing field: BRANCH_ID" });
@@ -416,7 +391,12 @@ router.post("/", authMiddleware, async (req, res) => {
         carId: Number(body.CAR_ID),
         customerId: Number(body.CUSTOMER_ID),
         branchId: Number(branchId),
-        managerId: user.role === "manager" ? Number(user.managerId) : (body.MANAGER_ID ? Number(body.MANAGER_ID) : null),
+        managerId:
+          user.role === "manager"
+            ? Number(user.managerId)
+            : body.MANAGER_ID
+            ? Number(body.MANAGER_ID)
+            : null,
         startAt: String(body.START_AT),
         dueAt: String(body.DUE_AT),
         status: (body.STATUS || "ACTIVE").toUpperCase(),
@@ -428,7 +408,6 @@ router.post("/", authMiddleware, async (req, res) => {
       { autoCommit: true }
     );
 
-    // Update Car Status to RENTED
     await conn.execute(
       `UPDATE CARS SET STATUS = 'RENTED' WHERE CAR_ID = :id`,
       { id: Number(body.CAR_ID) },
