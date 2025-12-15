@@ -9,7 +9,7 @@ Run:
 """
 
 from __future__ import annotations
-
+import bcrypt
 import time
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -214,6 +214,10 @@ def seed_branches() -> None:
         df.to_sql("BRANCHES", conn, if_exists="append", index=False)
 
     print("✅ Inserted branches")
+
+def hash_password(p: str) -> str:
+    # returns bcrypt hash as string
+    return bcrypt.hashpw(p.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def seed_managers() -> None:
