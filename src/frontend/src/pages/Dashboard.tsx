@@ -1,5 +1,4 @@
 // src/frontend/src/pages/Dashboard.tsx
-
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
@@ -415,45 +414,35 @@ export function DashboardPage() {
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-10">
       
-      {/* HEADER */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">Dashboard</h1>
-            <p className="text-neutral-400 mt-1">
-                Welcome back, <span className="text-indigo-400 font-semibold">{user?.firstName}</span>. Here is your daily fleet overview.
-            </p>
-        </div>
-        
-        <div className="flex items-center gap-3">
-             <div className="flex items-center rounded-lg bg-[#18181b] p-1 border border-white/10">
-                {(["7d", "30d", "90d"] as const).map((range) => (
-                    <button
-                        key={range}
-                        onClick={() => setTimeRange(range)}
-                        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all ${
-                            timeRange === range 
-                            ? "bg-indigo-600 text-white shadow-lg" 
-                            : "text-neutral-500 hover:text-white"
-                        }`}
-                    >
-                        {range.toUpperCase()}
-                    </button>
-                ))}
-             </div>
-             
-             <button 
-                onClick={() => setRefreshKey(k => k + 1)}
-                className="p-2.5 rounded-lg border border-white/10 bg-[#18181b] text-neutral-400 hover:text-white hover:bg-white/5 transition"
-                title="Refresh Data"
-             >
-                <RefreshCw size={18} />
-             </button>
-             
-             <button className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-500 shadow-lg shadow-indigo-600/20 transition">
-                <Download size={16} /> Export
-             </button>
-        </div>
-      </div>
+{/* DASHBOARD HEADER (actions only) */}
+<div className="flex items-center justify-end gap-3">
+  {/* Time range selector */}
+  <div className="flex items-center rounded-lg bg-[#18181b] p-1 border border-white/10">
+    {(["7d", "30d", "90d"] as const).map((range) => (
+      <button
+        key={range}
+        onClick={() => setTimeRange(range)}
+        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all ${
+          timeRange === range
+            ? "bg-indigo-600 text-white shadow-lg"
+            : "text-neutral-500 hover:text-white"
+        }`}
+      >
+        {range.toUpperCase()}
+      </button>
+    ))}
+  </div>
+
+  {/* Refresh */}
+  <button
+    onClick={() => setRefreshKey((k) => k + 1)}
+    className="p-2.5 rounded-lg border border-white/10 bg-[#18181b] text-neutral-400 hover:text-white hover:bg-white/5 transition"
+    title="Refresh Data"
+  >
+    <RefreshCw size={18} />
+  </button>
+</div>
+
 
       {/* KPI GRID */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">

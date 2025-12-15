@@ -1,4 +1,3 @@
-// src/frontend/src/components/Topbar.tsx
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Search, Bell, ChevronDown, LogOut, User, Settings } from "lucide-react";
@@ -33,6 +32,8 @@ function initials(first?: string, last?: string) {
   return ((first?.[0] ?? "") + (last?.[0] ?? "")).toUpperCase() || "U";
 }
 
+type BranchMeta = { name: string; city: string };
+
 export function Topbar() {
   const { user, token, logout } = useAuth();
   const location = useLocation();
@@ -40,14 +41,77 @@ export function Topbar() {
 
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // ✅ Alerts bell state
+  // Alerts
   const [bellOpen, setBellOpen] = useState(false);
   const [alertCount, setAlertCount] = useState<number>(0);
+
+  // Manager branch badge: Name + City
+  const [branchMeta, setBranchMeta] = useState<BranchMeta | null>(null);
 
   const pageMeta = useMemo(() => {
     const base = "/" + location.pathname.split("/").filter(Boolean)[0];
     return TITLES[base] || { title: "DriveOps", subtitle: "Fleet command center" };
   }, [location.pathname]);
+
+  // ✅ Load branch (manager only): GET /api/v1/branches returns ONE row for manager
+  useEffect(() => {
+    let alive = true;
+
+    async function loadBranch() {
+      if (user?.role !== "manager") {
+        setBranchMeta(null);
+        return;
+      }
+
+      const t = token || localStorage.getItem("token");
+      if (!t) {
+        setBranchMeta(null);
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_URL}/api/v1/branches`, {
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${t}`,
+          },
+        });
+
+        if (!res.ok) {
+          if (alive) setBranchMeta(null);
+          return;
+        }
+
+        const json = await res.json();
+        const row = Array.isArray(json) ? json[0] : json;
+
+        // Support BOTH shapes:
+        // - object: { BRANCH_NAME, CITY, ... }
+        // - array:  [BRANCH_ID, BRANCH_NAME, CITY, ADDRESS, PHONE, EMAIL, CREATED_AT]
+        const name =
+          (row && !Array.isArray(row) ? row.BRANCH_NAME ?? row.branchName ?? row.name : row?.[1]) ??
+          null;
+
+        const city =
+          (row && !Array.isArray(row) ? row.CITY ?? row.city : row?.[2]) ??
+          null;
+
+        if (alive && name && city) {
+          setBranchMeta({ name: String(name), city: String(city) });
+        } else if (alive) {
+          // strict: if missing => show nothing
+          setBranchMeta(null);
+        }
+      } catch {
+        if (alive) setBranchMeta(null);
+      }
+    }
+
+    loadBranch();
+    return () => {
+      alive = false;
+    };
+  }, [user?.role, token]);
 
   // ✅ Poll unresolved alerts count every 5 seconds
   useEffect(() => {
@@ -55,10 +119,11 @@ export function Topbar() {
 
     async function loadCount() {
       try {
+        const t = token || localStorage.getItem("token");
         const res = await fetch(`${API_URL}/api/v1/iot-alerts/unresolved-count`, {
           headers: {
             Accept: "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(t ? { Authorization: `Bearer ${t}` } : {}),
           },
         });
 
@@ -72,34 +137,48 @@ export function Topbar() {
     }
 
     loadCount();
-    const t = setInterval(loadCount, 5000);
+    const it = setInterval(loadCount, 5000);
 
     return () => {
       alive = false;
-      clearInterval(t);
+      clearInterval(it);
     };
   }, [token]);
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-white/5 bg-[#09090b]/80 backdrop-blur-xl transition-all">
       <div className="flex items-center justify-between px-6 py-4 lg:px-8">
-        {/* LEFT: Page Title & Breadcrumbs */}
+        {/* LEFT */}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold tracking-tight text-white">
               {pageMeta.title}
             </h1>
+
             <span className="hidden md:block h-6 w-px bg-white/10" />
+
             <div className="hidden md:flex items-center gap-2 text-sm font-medium text-neutral-400">
               <span className="text-neutral-500">{formatDate()}</span>
+
+              {/* ✅ Branch badge: Name • City */}
+              {user?.role === "manager" && branchMeta && (
+                <>
+                  <span className="h-4 w-px bg-white/10" />
+                  <span className="rounded-full border border-indigo-500/30 bg-indigo-500/10 px-3 py-0.5 text-xs font-semibold text-indigo-300">
+                    {branchMeta.name} <span className="text-indigo-200/70">•</span>{" "}
+                    {branchMeta.city}
+                  </span>
+                </>
+              )}
             </div>
           </div>
+
           <p className="mt-1 text-sm text-neutral-500 truncate">{pageMeta.subtitle}</p>
         </div>
 
-        {/* RIGHT: Actions */}
+        {/* RIGHT */}
         <div className="flex items-center gap-4">
-          {/* 1) Search Bar */}
+          {/* Search */}
           <div className="hidden md:flex group relative items-center">
             <Search className="absolute left-3 h-4 w-4 text-neutral-500 group-focus-within:text-indigo-400 transition" />
             <input
@@ -114,7 +193,7 @@ export function Topbar() {
             </div>
           </div>
 
-          {/* ✅ 2) Notifications Bell (count + dropdown) */}
+          {/* Alerts */}
           <div className="relative">
             <button
               onClick={() => setBellOpen((v) => !v)}
@@ -134,9 +213,7 @@ export function Topbar() {
                 <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-2xl border border-white/10 bg-[#121212] p-2 shadow-xl shadow-black/50 ring-1 ring-black/5 animate-in fade-in zoom-in-95 duration-100">
                   <div className="px-3 py-2 border-b border-white/5">
                     <div className="text-sm font-bold text-white">Alerts</div>
-                    <div className="text-xs text-neutral-400">
-                      {alertCount} unresolved incidents
-                    </div>
+                    <div className="text-xs text-neutral-400">{alertCount} unresolved incidents</div>
                   </div>
 
                   <button
@@ -153,18 +230,16 @@ export function Topbar() {
             )}
           </div>
 
-          {/* 3) User Profile Dropdown */}
+          {/* Profile */}
           <div className="relative">
             <button
               onClick={() => setMenuOpen(!menuOpen)}
               className="flex items-center gap-3 rounded-xl border border-transparent bg-transparent py-1 pl-1 pr-2 hover:bg-white/5 transition border-white/5"
             >
-              {/* Avatar */}
               <div className="grid h-9 w-9 place-items-center rounded-lg bg-gradient-to-br from-indigo-600 to-violet-600 text-sm font-bold text-white shadow-lg shadow-indigo-500/20">
                 {initials(user?.firstName, user?.lastName)}
               </div>
 
-              {/* Text Info */}
               <div className="hidden text-right md:block">
                 <div className="text-sm font-bold text-white leading-none">
                   {user?.firstName}

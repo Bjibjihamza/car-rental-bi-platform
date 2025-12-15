@@ -78,10 +78,14 @@ export function Sidebar() {
     <aside className="fixed left-0 top-0 z-50 flex h-screen w-20 flex-col border-r border-white/10 bg-[#0B0F14] shadow-2xl">
       <div className="flex h-full flex-col items-center py-6">
         
-        {/* Logo Section */}
-        <div className="mb-8">
-          <AppLogo />
-        </div>
+{/* Logo Section → Dashboard */}
+<NavLink
+  to="/dashboard"
+  className="mb-8 group"
+>
+  <AppLogo />
+</NavLink>
+
 
         {/* Navigation */}
         <nav className="flex w-full flex-1 flex-col items-center gap-4 px-2">
