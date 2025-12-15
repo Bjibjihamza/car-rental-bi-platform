@@ -157,8 +157,8 @@ Look for: `DATABASE IS READY TO USE!`
 Connect as SYSTEM and provision RAW/SILVER/GOLD users:
 
 ```bash
-docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
-  "sqlplus -s system/Admin#123@localhost:1521/XEPDB1 @/scripts/scripts/oracle_medallion_setup.sql"
+docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc "sqlplus -s system/Admin#123@localhost:1521/XEPDB1 @/scripts/scripts/oracle_medallion_setup.sql"
+
 ```
 
 **Creates**:
@@ -168,8 +168,7 @@ docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
 ### Step 2: Build Bronze Layer Tables
 
 ```bash
-docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
-  "sqlplus -s raw_layer/Raw#123@localhost:1521/XEPDB1 @/scripts/schema/bronze.sql"
+docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc "sqlplus -s raw_layer/Raw#123@localhost:1521/XEPDB1 @/scripts/schema/bronze.sql"
 ```
 
 **Creates** (in `RAW_LAYER` schema):
