@@ -19,13 +19,18 @@ type CustomerRow = {
   CUSTOMER_ID: number;
   FIRST_NAME: string;
   LAST_NAME: string;
+  NATIONAL_ID: string;
+  DRIVER_LICENSE_NO: string;
+  DATE_OF_BIRTH: string;
   EMAIL?: string | null;
   PHONE?: string | null;
 };
 
 export function RentalsCreatePage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const nav = useNavigate();
+
+  const isManager = String(user?.role || "").toLowerCase() === "manager";
 
   const [cars, setCars] = useState<CarRow[]>([]);
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
@@ -38,8 +43,12 @@ export function RentalsCreatePage() {
   const [TOTAL_AMOUNT, setTotalAmount] = useState<string>("");
   const [CURRENCY, setCurrency] = useState("MAD");
 
+  // Quick add customer
   const [newFn, setNewFn] = useState("");
   const [newLn, setNewLn] = useState("");
+  const [newCin, setNewCin] = useState("");
+  const [newDob, setNewDob] = useState(""); // YYYY-MM-DD
+  const [newLic, setNewLic] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [newPhone, setNewPhone] = useState("");
 
@@ -66,6 +75,9 @@ export function RentalsCreatePage() {
       const carsData = await carsRes.json();
       const custData = await custRes.json();
 
+      if (!carsRes.ok) throw new Error(carsData?.message || "Failed to load cars");
+      if (!custRes.ok) throw new Error(custData?.message || "Failed to load customers");
+
       setCars(Array.isArray(carsData) ? carsData : []);
       setCustomers(Array.isArray(custData) ? custData : []);
     } catch (e: any) {
@@ -77,6 +89,7 @@ export function RentalsCreatePage() {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const availableCars = useMemo(
@@ -87,8 +100,13 @@ export function RentalsCreatePage() {
   async function quickAddCustomer() {
     setErr(null);
     try {
-      if (!newFn.trim() || !newLn.trim()) {
-        setErr("Customer first name and last name are required");
+      if (!isManager) {
+        setErr("Only managers can add customers");
+        return;
+      }
+
+      if (!newFn.trim() || !newLn.trim() || !newCin.trim() || !newDob.trim() || !newLic.trim()) {
+        setErr("First/Last name, CIN, DOB, and License are required");
         return;
       }
 
@@ -96,10 +114,13 @@ export function RentalsCreatePage() {
         method: "POST",
         headers,
         body: JSON.stringify({
-          FIRST_NAME: newFn,
-          LAST_NAME: newLn,
-          EMAIL: newEmail || null,
-          PHONE: newPhone || null,
+          FIRST_NAME: newFn.trim(),
+          LAST_NAME: newLn.trim(),
+          NATIONAL_ID: newCin.trim(),
+          DATE_OF_BIRTH: newDob.trim(),
+          DRIVER_LICENSE_NO: newLic.trim(),
+          EMAIL: newEmail ? newEmail.trim() : null,
+          PHONE: newPhone ? newPhone.trim() : null,
         }),
       });
 
@@ -108,8 +129,12 @@ export function RentalsCreatePage() {
 
       await load();
       setCustomerId(Number(data.CUSTOMER_ID));
+
       setNewFn("");
       setNewLn("");
+      setNewCin("");
+      setNewDob("");
+      setNewLic("");
       setNewEmail("");
       setNewPhone("");
     } catch (e: any) {
@@ -120,12 +145,17 @@ export function RentalsCreatePage() {
   async function createRental() {
     setErr(null);
     try {
+      if (!isManager) {
+        setErr("Only managers can create rentals");
+        return;
+      }
+
       if (!CAR_ID || !CUSTOMER_ID || !START_AT || !DUE_AT) {
         setErr("Please fill Car, Customer, Start, Due");
         return;
       }
 
-      const payload: any = {
+      const payload = {
         CAR_ID,
         CUSTOMER_ID,
         START_AT: new Date(START_AT).toISOString(),
@@ -154,7 +184,7 @@ export function RentalsCreatePage() {
     <div className="space-y-6 animate-in fade-in duration-500">
       <Card
         title="Create rental"
-        subtitle="Assign a car to a customer"
+        subtitle={isManager ? "Assign a car to a customer" : "Managers only (view-only)"}
         right={
           <Link to="/rentals" className="text-sm text-neutral-300 hover:underline">
             Back
@@ -167,10 +197,17 @@ export function RentalsCreatePage() {
           </div>
         )}
 
+        {!isManager && (
+          <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+            You are logged in as <b>{user?.role}</b>. Only <b>MANAGER</b> can create rentals or customers.
+          </div>
+        )}
+
         {loading ? (
           <div className="text-sm text-neutral-400">Loading…</div>
         ) : (
           <div className="grid gap-6 md:grid-cols-2">
+            {/* LEFT */}
             <div className="space-y-3">
               <div>
                 <div className="text-xs text-neutral-400 mb-1">Car (AVAILABLE)</div>
@@ -178,6 +215,7 @@ export function RentalsCreatePage() {
                   value={CAR_ID}
                   onChange={(e) => setCarId(e.target.value ? Number(e.target.value) : "")}
                   className="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                  disabled={!isManager}
                 >
                   <option value="">Select a car…</option>
                   {availableCars.map((c) => (
@@ -194,21 +232,15 @@ export function RentalsCreatePage() {
                   value={CUSTOMER_ID}
                   onChange={(e) => setCustomerId(e.target.value ? Number(e.target.value) : "")}
                   className="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                  disabled={!isManager}
                 >
                   <option value="">Select a customer…</option>
                   {customers.map((c) => (
                     <option key={c.CUSTOMER_ID} value={c.CUSTOMER_ID}>
-                      {c.FIRST_NAME} {c.LAST_NAME}
-                      {c.EMAIL ? ` — ${c.EMAIL}` : ""}
+                      {c.FIRST_NAME} {c.LAST_NAME} — {c.NATIONAL_ID}
                     </option>
                   ))}
                 </select>
-
-                {customers.length === 0 && (
-                  <div className="mt-1 text-xs text-amber-300">
-                    No customers for your branch yet — add one on the right.
-                  </div>
-                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -219,6 +251,7 @@ export function RentalsCreatePage() {
                     value={START_AT}
                     onChange={(e) => setStartAt(e.target.value)}
                     className="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                    disabled={!isManager}
                   />
                 </div>
                 <div>
@@ -228,6 +261,7 @@ export function RentalsCreatePage() {
                     value={DUE_AT}
                     onChange={(e) => setDueAt(e.target.value)}
                     className="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                    disabled={!isManager}
                   />
                 </div>
               </div>
@@ -240,6 +274,7 @@ export function RentalsCreatePage() {
                     onChange={(e) => setTotalAmount(e.target.value)}
                     placeholder="e.g. 1200"
                     className="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                    disabled={!isManager}
                   />
                 </div>
                 <div>
@@ -248,6 +283,7 @@ export function RentalsCreatePage() {
                     value={CURRENCY}
                     onChange={(e) => setCurrency(e.target.value)}
                     className="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                    disabled={!isManager}
                   >
                     <option value="MAD">MAD</option>
                     <option value="USD">USD</option>
@@ -258,35 +294,72 @@ export function RentalsCreatePage() {
 
               <button
                 onClick={createRental}
-                className="h-10 rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white hover:bg-indigo-500"
+                className={`h-10 rounded-lg px-4 text-sm font-bold text-white ${
+                  isManager ? "bg-indigo-600 hover:bg-indigo-500" : "bg-white/10 cursor-not-allowed"
+                }`}
+                disabled={!isManager}
               >
                 Create rental
               </button>
             </div>
 
+            {/* RIGHT */}
             <div className="space-y-3 rounded-xl border border-white/10 bg-white/5 p-4">
               <div className="text-sm font-bold text-white">Quick add customer</div>
+
+              {!isManager && (
+                <div className="text-xs text-neutral-400">
+                  Disabled for <b>SUPERVISOR</b>.
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <input
                   value={newFn}
                   onChange={(e) => setNewFn(e.target.value)}
-                  placeholder="First name"
+                  placeholder="First name *"
                   className="h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                  disabled={!isManager}
                 />
                 <input
                   value={newLn}
                   onChange={(e) => setNewLn(e.target.value)}
-                  placeholder="Last name"
+                  placeholder="Last name *"
                   className="h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                  disabled={!isManager}
                 />
               </div>
+
+              <input
+                value={newCin}
+                onChange={(e) => setNewCin(e.target.value)}
+                placeholder="CIN (NATIONAL_ID) *"
+                className="h-10 w-full rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                disabled={!isManager}
+              />
+
+              <input
+                type="date"
+                value={newDob}
+                onChange={(e) => setNewDob(e.target.value)}
+                className="h-10 w-full rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                disabled={!isManager}
+              />
+
+              <input
+                value={newLic}
+                onChange={(e) => setNewLic(e.target.value)}
+                placeholder="Driver license *"
+                className="h-10 w-full rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                disabled={!isManager}
+              />
 
               <input
                 value={newEmail}
                 onChange={(e) => setNewEmail(e.target.value)}
                 placeholder="Email (optional)"
                 className="h-10 w-full rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                disabled={!isManager}
               />
 
               <input
@@ -294,11 +367,15 @@ export function RentalsCreatePage() {
                 onChange={(e) => setNewPhone(e.target.value)}
                 placeholder="Phone (optional)"
                 className="h-10 w-full rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white"
+                disabled={!isManager}
               />
 
               <button
                 onClick={quickAddCustomer}
-                className="h-10 rounded-lg bg-white/10 border border-white/10 px-4 text-sm font-bold text-white hover:bg-white/15"
+                className={`h-10 rounded-lg border border-white/10 px-4 text-sm font-bold text-white ${
+                  isManager ? "bg-white/10 hover:bg-white/15" : "bg-white/5 cursor-not-allowed"
+                }`}
+                disabled={!isManager}
               >
                 Add customer
               </button>

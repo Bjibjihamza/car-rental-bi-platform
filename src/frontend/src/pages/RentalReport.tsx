@@ -66,7 +66,7 @@ export function RentalReportPage() {
             </div>
           </div>
           <Badge tone="indigo">
-            {new Date(rental.START_AT).toLocaleDateString()} →{" "}
+{new Date(rental.START_AT).toLocaleDateString()} → {new Date(rental.END_AT).toLocaleDateString()}
             {new Date(rental.END_AT).toLocaleDateString()}
           </Badge>
         </div>

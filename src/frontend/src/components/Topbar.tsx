@@ -1,8 +1,12 @@
 // src/frontend/src/components/Topbar.tsx
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Search, Bell, ChevronDown, LogOut, User, Settings } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
+
+const API_URL =
+  (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/$/, "") ||
+  "http://localhost:8000";
 
 const TITLES: Record<string, { title: string; subtitle?: string }> = {
   "/dashboard": { title: "Dashboard", subtitle: "Fleet overview & daily ops" },
@@ -30,15 +34,51 @@ function initials(first?: string, last?: string) {
 }
 
 export function Topbar() {
-  const { user, logout } = useAuth();
+  const { user, token, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // ✅ Alerts bell state
+  const [bellOpen, setBellOpen] = useState(false);
+  const [alertCount, setAlertCount] = useState<number>(0);
 
   const pageMeta = useMemo(() => {
     const base = "/" + location.pathname.split("/").filter(Boolean)[0];
     return TITLES[base] || { title: "DriveOps", subtitle: "Fleet command center" };
   }, [location.pathname]);
+
+  // ✅ Poll unresolved alerts count every 5 seconds
+  useEffect(() => {
+    let alive = true;
+
+    async function loadCount() {
+      try {
+        const res = await fetch(`${API_URL}/api/v1/iot-alerts/unresolved-count`, {
+          headers: {
+            Accept: "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+
+        const json = await res.json();
+        if (!res.ok) return;
+
+        if (alive) setAlertCount(Number(json?.count || 0));
+      } catch {
+        // ignore
+      }
+    }
+
+    loadCount();
+    const t = setInterval(loadCount, 5000);
+
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [token]);
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-white/5 bg-[#09090b]/80 backdrop-blur-xl transition-all">
@@ -59,7 +99,7 @@ export function Topbar() {
 
         {/* RIGHT: Actions */}
         <div className="flex items-center gap-4">
-          {/* 1. Search Bar (Glassy) */}
+          {/* 1) Search Bar */}
           <div className="hidden md:flex group relative items-center">
             <Search className="absolute left-3 h-4 w-4 text-neutral-500 group-focus-within:text-indigo-400 transition" />
             <input
@@ -74,13 +114,46 @@ export function Topbar() {
             </div>
           </div>
 
-          {/* 2. Notifications Bell */}
-          <button className="group relative grid h-10 w-10 place-items-center rounded-xl border border-white/5 bg-white/5 hover:bg-white/10 hover:border-white/10 transition">
-            <Bell className="h-5 w-5 text-neutral-400 group-hover:text-white transition" />
-            <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-indigo-500 ring-2 ring-[#09090b]" />
-          </button>
+          {/* ✅ 2) Notifications Bell (count + dropdown) */}
+          <div className="relative">
+            <button
+              onClick={() => setBellOpen((v) => !v)}
+              className="group relative grid h-10 w-10 place-items-center rounded-xl border border-white/5 bg-white/5 hover:bg-white/10 hover:border-white/10 transition"
+            >
+              <Bell className="h-5 w-5 text-neutral-400 group-hover:text-white transition" />
+              {alertCount > 0 && (
+                <span className="absolute -right-1 -top-1 min-w-[18px] h-[18px] px-1 rounded-full bg-indigo-500 text-[11px] font-bold text-white grid place-items-center ring-2 ring-[#09090b]">
+                  {alertCount > 99 ? "99+" : alertCount}
+                </span>
+              )}
+            </button>
 
-          {/* 3. User Profile Dropdown */}
+            {bellOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setBellOpen(false)} />
+                <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-2xl border border-white/10 bg-[#121212] p-2 shadow-xl shadow-black/50 ring-1 ring-black/5 animate-in fade-in zoom-in-95 duration-100">
+                  <div className="px-3 py-2 border-b border-white/5">
+                    <div className="text-sm font-bold text-white">Alerts</div>
+                    <div className="text-xs text-neutral-400">
+                      {alertCount} unresolved incidents
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setBellOpen(false);
+                      navigate("/alerts");
+                    }}
+                    className="mt-2 w-full rounded-xl bg-white/5 hover:bg-white/10 px-3 py-2 text-sm font-medium text-white transition"
+                  >
+                    View Alerts
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* 3) User Profile Dropdown */}
           <div className="relative">
             <button
               onClick={() => setMenuOpen(!menuOpen)}
@@ -127,6 +200,7 @@ export function Topbar() {
                     >
                       <User className="h-4 w-4" /> Profile
                     </button>
+
                     <button
                       className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-neutral-300 hover:bg-white/5 hover:text-white transition"
                       onClick={() => setMenuOpen(false)}

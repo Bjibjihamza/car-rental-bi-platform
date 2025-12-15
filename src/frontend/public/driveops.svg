@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded square background -->
+  <rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="url(#g)"/>
+
+  <!-- Car / device icon (white strokes like your sidebar svg) -->
+  <g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.95">
+    <path d="M19 13V10c0-1.1046-.8954-2-2-2H7c-1.1046 0-2 .8954-2 2v3"/>
+    <path d="M19 13c0 1.1046-.8954 2-2 2H7c-1.1046 0-2-.8954-2-2"/>
+    <path d="M19 13h2v3h-2M5 13H3v3h2"/>
+    <path d="M8 17v2M16 17v2" opacity="0.9"/>
+    <path d="M8.5 4.5c2-2 5-2 7 0" opacity="0.85"/>
+    <path d="M10 6c1.333-1 2.667-1 4 0" opacity="0.85"/>
+  </g>
+</svg>
