@@ -168,7 +168,7 @@ function buildReport(telemetry, options = {}) {
     routePoints,
   };
 }
-
+// ✅ FULL ROUTE: GET /api/v1/rentals/:id/report
 router.get("/:id/report", authMiddleware, async (req, res) => {
   const rentalId = Number(req.params.id);
   const sample = Math.min(Math.max(Number(req.query.sample || 80), 10), 300);
@@ -207,28 +207,50 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
     const row = rentalR.rows?.[0];
     if (!row) return res.status(404).json({ message: "Rental not found" });
 
-    const RENTAL_ID = row.RENTAL_ID;
-    const CAR_ID = row.CAR_ID;
-    const BRANCH_ID = row.BRANCH_ID;
+    const RENTAL_ID = Number(row.RENTAL_ID);
+    const CAR_ID = Number(row.CAR_ID);
+    const BRANCH_ID = Number(row.BRANCH_ID);
     const START_AT = row.START_AT;
     const END_AT = row.END_AT;
     const LICENSE_PLATE = row.LICENSE_PLATE;
     const MAKE = row.MAKE;
     const MODEL = row.MODEL;
 
-    // 2) Decode the "unique" rental id that streamer created: car*1000 + simId
-    const carIdFromUnique = Math.floor(Number(RENTAL_ID) / 1000);
-    const simRentalId = Number(RENTAL_ID) % 1000;
-
-    // Safety: if this rental was manually created (not from streamer),
-    // fallback to time-window query.
-    const looksLikeStreamed = carIdFromUnique === Number(CAR_ID) && simRentalId > 0;
-
+    // 2) Telemetry for THIS rental only (strict)
+    // ✅ Primary: RT_IOT_FEED tagged with real RENTAL_ID (from streamer)
     let telemetry = [];
 
-    if (looksLikeStreamed) {
-      // ✅ BEST: use historical telemetry (stable and aligned)
-      const telemetrySql = `
+    const rtSql = `
+      SELECT
+        rt.RECEIVED_AT,
+        rt.DEVICE_ID,
+        rt.CAR_ID,
+        rt.EVENT_TYPE,
+        rt.SPEED_KMH,
+        rt.FUEL_LEVEL_PCT,
+        rt.ENGINE_TEMP_C,
+        rt.LATITUDE,
+        rt.LONGITUDE,
+        rt.ODOMETER_KM,
+        rt.ACCELERATION_MS2,
+        rt.BRAKE_PRESSURE_BAR
+      FROM RT_IOT_FEED rt
+      WHERE rt.RENTAL_ID = :rid
+      ORDER BY rt.RECEIVED_AT ASC
+    `;
+
+    const rtR = await conn.execute(
+      rtSql,
+      { rid: RENTAL_ID },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+
+    telemetry = rtR.rows || [];
+
+    // ✅ Fallback: if streamer didn't tag RT_IOT_FEED.RENTAL_ID yet
+    // Use historical IOT_TELEMETRY within rental window (CAR_ID + time range)
+    if (!telemetry.length) {
+      const histSql = `
         SELECT
           EVENT_TS AS RECEIVED_AT,
           DEVICE_ID,
@@ -244,50 +266,21 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
           BRAKE_PRESSURE_BAR
         FROM IOT_TELEMETRY
         WHERE CAR_ID = :carId
-          AND RENTAL_ID = :simRentalId
+          AND EVENT_TS >= :startAt
+          AND EVENT_TS <= :endAt
         ORDER BY EVENT_TS ASC
       `;
 
-      const telemetryR = await conn.execute(
-        telemetrySql,
-        { carId: Number(CAR_ID), simRentalId },
+      const histR = await conn.execute(
+        histSql,
+        { carId: CAR_ID, startAt: START_AT, endAt: END_AT },
         { outFormat: oracledb.OUT_FORMAT_OBJECT }
       );
 
-      telemetry = telemetryR.rows || [];
-    } else {
-      // ✅ fallback: old behavior for manual rentals
-      const telemetrySql = `
-        SELECT
-          rt.RECEIVED_AT,
-          rt.DEVICE_ID,
-          rt.CAR_ID,
-          rt.EVENT_TYPE,
-          rt.SPEED_KMH,
-          rt.FUEL_LEVEL_PCT,
-          rt.ENGINE_TEMP_C,
-          rt.LATITUDE,
-          rt.LONGITUDE,
-          rt.ODOMETER_KM,
-          rt.ACCELERATION_MS2,
-          rt.BRAKE_PRESSURE_BAR
-        FROM RT_IOT_FEED rt
-        WHERE rt.CAR_ID = :carId
-          AND rt.RECEIVED_AT >= :startAt
-          AND rt.RECEIVED_AT <= :endAt
-        ORDER BY rt.RECEIVED_AT ASC
-      `;
-
-      const telemetryR = await conn.execute(
-        telemetrySql,
-        { carId: Number(CAR_ID), startAt: START_AT, endAt: END_AT },
-        { outFormat: oracledb.OUT_FORMAT_OBJECT }
-      );
-
-      telemetry = telemetryR.rows || [];
+      telemetry = histR.rows || [];
     }
 
-    // 3) Build report (your existing logic)
+    // 3) Build report metrics + route (your existing logic)
     const { metrics, routePoints } = buildReport(telemetry, {
       SPEEDING_KMH: 120,
       HARSH_BRAKE_BAR: 65,
@@ -297,6 +290,7 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
 
     const route = downsample(routePoints, sample);
 
+    // 4) Response (shape expected by RentalReportPage)
     res.json({
       rental: {
         RENTAL_ID,
@@ -308,7 +302,7 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
         START_AT,
         END_AT,
         telemetryPoints: telemetry.length,
-        simRentalId: looksLikeStreamed ? simRentalId : null,
+        simRentalId: null, // ✅ no more sim id trick
       },
       metrics,
       route,
@@ -317,10 +311,11 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
     console.error("RENTAL_REPORT_ERROR:", e);
     res.status(500).json({ message: e.message || "Failed to build report" });
   } finally {
-    try { if (conn) await conn.close(); } catch {}
+    try {
+      if (conn) await conn.close();
+    } catch {}
   }
 });
-
 
 /* ================= ROUTES ================= */
 

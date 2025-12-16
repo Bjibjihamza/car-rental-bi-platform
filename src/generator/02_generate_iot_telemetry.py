@@ -1,85 +1,74 @@
-# 02_generate_iot_telemetry.py
-# ============================================================
-# Generate synthetic IoT telemetry and write it directly
-# into Oracle table IOT_TELEMETRY.
+# 02_generate_iot_telementry.py
+# =============================================================================
+# Generates REALISTIC + COHERENT IoT telemetry for the NEXT 7 DAYS
+# ✅ DOES NOT create RENTALS
+# ✅ DOES NOT update CARS status or odometer
+# - Writes into IOT_TELEMETRY (RENTAL_ID = NULL)
+# - Optionally fills RT_IOT_FEED as "live buffer"
 #
-# BI-friendly version:
-#   - Rentals can span multiple days (1, 2, 3, 5, 7, 10, 14 days).
-#   - For a given CAR_ID + RENTAL_ID, the rental may cover several days.
-#   - Distance GPS, SPEED_KMH and ODOMETER_KM are coherent.
-#   - In ~70% of days, there is NO driving between 04:00–08:00 and 14:00–16:00.
-#   - Some cars are barely or never rented (fleet realism).
-#
-# Date logic:
-#   - If IOT_TELEMETRY already has data:
-#       start_date = (max(EVENT_TS).date() + 1 day)
-#   - Else:
-#       start_date = date.today()
-#   - Then we simulate DAYS_FORWARD days (~1 month)
-#   - Before insert, we TRUNCATE IOT_TELEMETRY
-# ============================================================
+# Run:
+#   python 02_generate_week_iot_only.py
+# =============================================================================
 
-import os
+from __future__ import annotations
+
 import math
 import random
-from datetime import datetime, timedelta, date
+from dataclasses import dataclass
+from datetime import datetime, timedelta, time, date
+from typing import List, Tuple, Optional
 
 import pandas as pd
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
 
-import osmnx as ox
-import networkx as nx
-
-# ============================================================
+# =============================================================================
 # CONFIG
-# ============================================================
+# =============================================================================
 
-ORACLE_USER = "raw_layer"
-ORACLE_PWD = "Raw#123"
-ORACLE_DSN = "localhost:1521/XEPDB1"
+ORACLE_URL = "oracle+oracledb://"
+CONNECT_ARGS = {"user": "raw_layer", "password": "Raw#123", "dsn": "localhost:1521/XEPDB1"}
 
-RANDOM_SEED = 42                # reproductible
-IOT_INTERVAL_SECONDS = 30       # fréquence IoT
-DAYS_FORWARD = 31               # ~1 mois glissant
+RANDOM_SEED = 42
 
-# Fenêtre globale de conduite (hard) – “jamais” hors de ça
-DAY_START_HOUR = 7   # 07h00
-DAY_END_HOUR = 21    # 21h00
+DAYS_FORWARD = 7
+ANCHOR_NOW_PLUS_MIN = 5
 
-# Fenêtres “soft” (pas de conduite dans 70% des cas)
-SOFT_FORBIDDEN_WINDOWS = [
-    (4, 8),   # 04:00–08:00 (matin très tôt)
-    (14, 16)  # 14:00–16:00 (après déjeuner)
-]
-PROB_AVOID_FORBIDDEN = 0.7  # 70% des jours : on évite ces fenêtres
+# Telemetry frequency
+# NOTE: 15 seconds = 4 points/minute (high volume)
+IOT_INTERVAL_SECONDS = 15
 
-# Probabilités de trajets par jour (quand la voiture est louée)
-P_NO_TRIP = 0.4      # 40% des jours sans trajet
-P_ONE_TRIP = 0.45    # 45% des jours avec 1 trajet
-P_TWO_TRIPS = 0.15   # 15% des jours avec 2 trajets
+DAY_START_HOUR = 7
+DAY_END_HOUR = 21
 
-# Durée d'un trajet (en minutes)
-TRIP_DURATION_MIN_MIN = 15
-TRIP_DURATION_MIN_MAX = 90
+# Trips/day (per car that is "active")
+P_NO_TRIP = 0.35
+P_ONE_TRIP = 0.50
+P_TWO_TRIPS = 0.15
+TRIP_DURATION_MIN_MIN = 12
+TRIP_DURATION_MIN_MAX = 75
 
-# Durées possibles d'une location (en jours) + poids
-RENTAL_DURATION_OPTIONS = [1, 2, 3, 5, 7, 10, 14]
-RENTAL_DURATION_WEIGHTS = [0.3, 0.2, 0.15, 0.15, 0.1, 0.05, 0.05]
+# "Rental duration" concept kept فقط للتخطيط, لكن بدون Rentals table
+RENTAL_DURATION_OPTIONS = [1, 2, 3, 4]
+RENTAL_DURATION_WEIGHTS = [0.45, 0.30, 0.18, 0.07]
 
-# Certains cars ne seront JAMAIS loués du mois
-PROB_CAR_NEVER_RENTED = 0.15   # 15% de la flotte “parking only”
+PROB_CAR_NOT_RENTED_THIS_WEEK = 0.35  # some cars stay idle (no trips)
 
-# Profils de vitesse par catégorie (km/h)
+FILL_RT_IOT_FEED = True
+RT_KEEP_LAST_N_ROWS_PER_CAR = 300
+
+RESET_BEFORE_RUN = True   # only clears IoT tables now (NOT RENTALS)
+
 CATEGORY_SPEED_PROFILE = {
-    "ECONOMY": {"city": (20, 60), "mixed": (30, 80), "highway": (70, 110)},
-    "SUV":     {"city": (20, 60), "mixed": (30, 90), "highway": (80, 130)},
-    "LUXURY":  {"city": (20, 60), "mixed": (40, 100), "highway": (90, 140)},
-    "VAN":     {"city": (15, 50), "mixed": (30, 80), "highway": (70, 120)},
-    "ELECTRIC":{"city": (20, 60), "mixed": (30, 80), "highway": (70, 120)},
+    "ECONOMY":  {"city": (18, 55), "mixed": (25, 80), "highway": (75, 110)},
+    "SUV":      {"city": (18, 60), "mixed": (30, 90), "highway": (85, 130)},
+    "LUXURY":   {"city": (18, 60), "mixed": (35, 105), "highway": (95, 145)},
+    "VAN":      {"city": (15, 50), "mixed": (25, 80), "highway": (75, 120)},
+    "ELECTRIC": {"city": (18, 55), "mixed": (25, 80), "highway": (75, 120)},
 }
 
-# Coordonnées approximatives des villes pour simuler la position
+CATEGORY_FUEL_CONS = {"ECONOMY": 6.2, "SUV": 8.7, "LUXURY": 9.8, "VAN": 9.3, "ELECTRIC": 0.0}
+CATEGORY_TANK_SIZE = {"ECONOMY": 45,  "SUV": 60,  "LUXURY": 65,  "VAN": 75,  "ELECTRIC": 0}
+
 CITY_COORDS = {
     "CASABLANCA": (33.5731, -7.5898),
     "RABAT":      (34.0209, -6.8416),
@@ -88,157 +77,114 @@ CITY_COORDS = {
     "AGADIR":     (30.4278, -9.5981),
 }
 
-# Consommation carburant approximative par catégorie (litres / 100km)
-CATEGORY_FUEL_CONS = {
-    "ECONOMY": 6.0,
-    "SUV": 8.5,
-    "LUXURY": 9.5,
-    "VAN": 9.0,
-    "ELECTRIC": 0.0,  # géré différemment si besoin
-}
+ENGINE = create_engine(ORACLE_URL, connect_args=CONNECT_ARGS, pool_pre_ping=True)
 
-# Capacité réservoir (L) par catégorie (pour calculer %)
-CATEGORY_TANK_SIZE = {
-    "ECONOMY": 45,
-    "SUV": 60,
-    "LUXURY": 65,
-    "VAN": 75,
-    "ELECTRIC": 0,    # batterie, on garde % direct
-}
+# =============================================================================
+# HELPERS
+# =============================================================================
 
-# ============================================================
-# DB CONNECTION
-# ============================================================
-
-engine = create_engine(
-    "oracle+oracledb://",
-    connect_args={"user": ORACLE_USER, "password": ORACLE_PWD, "dsn": ORACLE_DSN},
-    pool_pre_ping=True,
-)
-
-# ============================================================
-# DATE LOGIC: START DATE FROM DB OR TODAY
-# ============================================================
-
-def get_start_datetime_now_plus_5min():
-    """
-    Start telemetry at (now + 5 minutes), regardless of DB content.
-    """
-    start_dt = datetime.now() + timedelta(minutes=5)
-    print(f"⏱️ Run start anchor = now+5min = {start_dt}")
-    return start_dt
-
-
-# ============================================================
-# UTILS
-# ============================================================
-
-def setup_random_seed():
+def set_seed():
     random.seed(RANDOM_SEED)
 
+def now_anchor() -> datetime:
+    dt = datetime.now() + timedelta(minutes=ANCHOR_NOW_PLUS_MIN)
+    if dt.hour >= DAY_END_HOUR or dt.hour < DAY_START_HOUR:
+        tomorrow = (dt + timedelta(days=1)).date()
+        dt = datetime.combine(tomorrow, time(9, 0))
+    print(f"⏱️ Anchor start = {dt}")
+    return dt
 
-def pick_trip_type():
+def get_city_center(city: str) -> Tuple[float, float]:
+    city_u = (city or "CASABLANCA").upper()
+    return CITY_COORDS.get(city_u, CITY_COORDS["CASABLANCA"])
+
+def haversine_km(lat1, lon1, lat2, lon2) -> float:
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat/2)**2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
+
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+def pick_trip_type() -> str:
     r = random.random()
-    if r < 0.5:
+    if r < 0.55:
         return "city"
-    elif r < 0.8:
+    elif r < 0.85:
         return "mixed"
-    else:
-        return "highway"
+    return "highway"
 
-
-def sample_speed(category_name, trip_type):
+def sample_speed_kmh(category_name: str, trip_type: str) -> float:
     prof = CATEGORY_SPEED_PROFILE.get(category_name.upper(), CATEGORY_SPEED_PROFILE["ECONOMY"])
     vmin, vmax = prof[trip_type]
     return random.uniform(vmin, vmax)
 
-
-def compute_acceleration(prev_speed_kmh, speed_kmh, dt_seconds):
+def compute_acc_ms2(prev_speed_kmh: Optional[float], speed_kmh: float, dt_s: int) -> float:
     if prev_speed_kmh is None:
         return 0.0
     v1 = prev_speed_kmh / 3.6
     v2 = speed_kmh / 3.6
-    return (v2 - v1) / dt_seconds
+    return (v2 - v1) / dt_s
 
-
-def compute_brake_pressure(acc_ms2):
+def brake_pressure_bar(acc_ms2: float) -> float:
     if acc_ms2 < -2.5:
-        return random.uniform(40, 80)
-    elif acc_ms2 < -1.0:
-        return random.uniform(10, 40)
-    else:
-        return random.uniform(0, 5)
+        return random.uniform(35, 80)
+    if acc_ms2 < -1.0:
+        return random.uniform(10, 35)
+    return random.uniform(0, 4)
 
+def simulate_battery_voltage(engine_on: bool) -> float:
+    return random.uniform(13.5, 14.4) if engine_on else random.uniform(12.2, 12.9)
 
-def update_fuel_level(fuel_pct, category_name, speed_kmh, dt_seconds):
-    if CATEGORY_FUEL_CONS.get(category_name.upper(), 0.0) == 0:
-        return fuel_pct
-
-    dist_km = speed_kmh * dt_seconds / 3600.0
-    cons_l_per_100 = CATEGORY_FUEL_CONS[category_name.upper()]
-    tank_size = CATEGORY_TANK_SIZE[category_name.upper()]
-    if tank_size <= 0:
-        return fuel_pct
-
-    cons_l = cons_l_per_100 * dist_km / 100.0
-    cons_pct = (cons_l / tank_size) * 100.0
-    fuel_pct = max(0.0, fuel_pct - cons_pct)
-    return fuel_pct
-
-
-def simulate_engine_temp(prev_temp, speed_kmh, is_engine_on):
-    if not is_engine_on:
-        if prev_temp is None:
+def simulate_engine_temp(prev: Optional[float], speed_kmh: float, engine_on: bool) -> float:
+    if not engine_on:
+        if prev is None:
             return 25.0
-        return max(25.0, prev_temp - random.uniform(0.1, 0.3))
+        return max(25.0, prev - random.uniform(0.2, 0.6))
 
-    if prev_temp is None:
-        prev_temp = 40.0
+    if prev is None:
+        prev = 45.0
 
-    target = 90.0 if speed_kmh > 20 else 70.0
-    delta = (target - prev_temp) * 0.1
-    return prev_temp + delta + random.uniform(-1.0, 1.0)
+    target = 92.0 if speed_kmh > 30 else 75.0
+    prev = prev + (target - prev) * random.uniform(0.08, 0.12)
+    return prev + random.uniform(-0.8, 0.8)
 
+def update_fuel_pct(fuel_pct: float, category: str, speed_kmh: float, dt_s: int) -> float:
+    cat = category.upper()
+    cons = CATEGORY_FUEL_CONS.get(cat, 0.0)
+    tank = CATEGORY_TANK_SIZE.get(cat, 0)
+    if cons <= 0 or tank <= 0:
+        return fuel_pct
 
-def simulate_battery_voltage(is_engine_on):
-    if is_engine_on:
-        return random.uniform(13.5, 14.3)
-    else:
-        return random.uniform(12.2, 12.8)
+    dist_km = speed_kmh * dt_s / 3600.0
+    cons_l = cons * dist_km / 100.0
+    cons_pct = (cons_l / tank) * 100.0
+    return max(0.0, fuel_pct - cons_pct)
 
+def random_start_time_for_day(day: date, win_start: datetime | None = None) -> datetime:
+    start_min = DAY_START_HOUR * 60
+    end_min = (DAY_END_HOUR - 1) * 60
+    m = random.randint(start_min, end_min)
+    dt = datetime.combine(day, time(0, 0)) + timedelta(minutes=m)
+    if win_start is not None and dt < win_start:
+        dt = win_start
+    return dt
 
-def get_city_center(city):
-    city_u = (city or "").upper()
-    return CITY_COORDS.get(city_u, CITY_COORDS["CASABLANCA"])
-
-
-def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlon / 2) ** 2
-    )
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
-
-
-def sample_rental_duration(max_days: int) -> int:
-    options = []
-    weights = []
+def sample_rental_days(max_days: int) -> int:
+    options, weights = [], []
     for d, w in zip(RENTAL_DURATION_OPTIONS, RENTAL_DURATION_WEIGHTS):
         if d <= max_days:
             options.append(d)
             weights.append(w)
-
     if not options:
         return max(1, max_days)
 
-    total_w = sum(weights)
-    r = random.random() * total_w
+    total = sum(weights)
+    r = random.random() * total
     cum = 0.0
     for d, w in zip(options, weights):
         cum += w
@@ -246,413 +192,325 @@ def sample_rental_duration(max_days: int) -> int:
             return d
     return options[-1]
 
-# ============================================================
-# TIME WINDOWS (70% NO DRIVING IN 04–08 & 14–16)
-# ============================================================
+# =============================================================================
+# DB FETCH
+# =============================================================================
 
-def build_allowed_windows_for_day(min_start_dt: datetime | None = None):
-    """
-    Allowed start windows for a day.
-    - Hard window: [DAY_START_HOUR, DAY_END_HOUR]
-    - 70% of days: avoid 04–08 and 14–16
-    - If min_start_dt is given (day 0), force earliest start >= min_start_dt
-    """
-    base_start = DAY_START_HOUR
-    base_end = DAY_END_HOUR
+def fetch_df(sql: str, params: dict | None = None) -> pd.DataFrame:
+    with ENGINE.connect() as conn:
+        return pd.read_sql(text(sql), conn, params=params or {})
 
-    # ✅ day-0 override: start from "now+5min"
-    if min_start_dt is not None:
-        min_h = min_start_dt.hour + (min_start_dt.minute / 60.0)
-        base_start = max(0.0, min_h)          # allow night driving day-0
-        base_end = DAY_END_HOUR
+def load_reference_data():
+    branches = fetch_df("""
+        SELECT BRANCH_ID, BRANCH_NAME, CITY
+        FROM BRANCHES
+        ORDER BY BRANCH_ID
+    """)
 
-        if base_start >= base_end:
-            return [(DAY_START_HOUR, DAY_END_HOUR)]
-        # day-0: don’t apply forbidden windows to guarantee activity
-        return [(base_start, base_end)]
-
-    # normal days (your existing behavior)
-    avoid = random.random() < PROB_AVOID_FORBIDDEN
-    if not avoid:
-        return [(base_start, base_end)]
-
-    windows = []
-    seg1_start = max(base_start, 8)
-    seg1_end = min(base_end, 14)
-    if seg1_start < seg1_end:
-        windows.append((seg1_start, seg1_end))
-
-    seg2_start = max(base_start, 16)
-    seg2_end = base_end
-    if seg2_start < seg2_end:
-        windows.append((seg2_start, seg2_end))
-
-    if not windows:
-        windows = [(base_start, base_end)]
-
-    return windows
-
-
-def sample_start_minute_from_windows(windows):
-    """
-    windows : liste de tuples (start_h, end_h) en heures.
-    Retourne un start_minute (minutes depuis 00:00) tiré
-    uniformément sur l'union des fenêtres.
-    """
-    segments = []
-    total_minutes = 0
-
-    for (h_start, h_end) in windows:
-        m_start = int(h_start * 60)
-        m_end = int(h_end * 60)
-        if m_end <= m_start:
-            continue
-        length = m_end - m_start
-        segments.append((m_start, m_end, length))
-        total_minutes += length
-
-    if not segments:
-        m_start = DAY_START_HOUR * 60
-        m_end = DAY_END_HOUR * 60
-        return random.randint(m_start, m_end - 30)
-
-    r = random.randint(0, total_minutes - 1)
-    cum = 0
-    for (m_start, m_end, length) in segments:
-        if r < cum + length:
-            offset = r - cum
-            return m_start + offset
-        cum += length
-
-    m_start, m_end, _ = segments[-1]
-    return random.randint(m_start, m_end - 30)
-
-# ============================================================
-# OSM / ROUTING HELPERS
-# ============================================================
-
-_CITY_GRAPHS = {}
-
-def get_city_graph(city):
-    city_u = (city or "").title() + ", Morocco"
-    if city_u in _CITY_GRAPHS:
-        return _CITY_GRAPHS[city_u]
-
-    print(f"🗺️  Loading road graph for {city_u} from OpenStreetMap...")
-    G = ox.graph_from_place(city_u, network_type="drive")
-    _CITY_GRAPHS[city_u] = G
-    return G
-
-
-def build_road_route_for_trip(city, steps, lat0, lon0):
-    G = get_city_graph(city)
-
-    # Node le plus proche du centre donné
-    orig = ox.distance.nearest_nodes(G, lon0, lat0)
-
-    nodes = list(G.nodes)
-    dest = orig
-    tries = 0
-    while dest == orig and tries < 50:
-        dest = random.choice(nodes)
-        tries += 1
-
-    path_out = None
-    if dest is not None and orig is not None:
-        try:
-            path_out = ox.shortest_path(G, orig, dest, weight="length")
-        except Exception:
-            path_out = None
-
-    # Si pas de chemin trouvé → on reste sur place
-    if not path_out or len(path_out) < 2:
-        return [(lat0, lon0)] * (steps + 1)
-
-    # Aller-retour
-    path_back = list(reversed(path_out))
-    full_path = path_out + path_back[1:]
-
-    coords_path = [(G.nodes[n]["y"], G.nodes[n]["x"]) for n in full_path]
-
-    if len(coords_path) == 1:
-        return [(lat0, lon0)] * (steps + 1)
-
-    # Resampling sur "steps" points
-    coords_resampled = []
-    for i in range(steps + 1):
-        idx_float = i * (len(coords_path) - 1) / steps
-        idx0 = int(idx_float)
-        idx1 = min(idx0 + 1, len(coords_path) - 1)
-        alpha = idx_float - idx0
-
-        lat0_seg, lon0_seg = coords_path[idx0]
-        lat1_seg, lon1_seg = coords_path[idx1]
-
-        lat = lat0_seg + alpha * (lat1_seg - lat0_seg)
-        lon = lon0_seg + alpha * (lon1_seg - lon0_seg)
-        coords_resampled.append((lat, lon))
-
-    # On force départ et fin au centre
-    coords_resampled[0] = (lat0, lon0)
-    coords_resampled[-1] = (lat0, lon0)
-
-    return coords_resampled
-
-# ============================================================
-# FETCH CARS & DEVICES FROM DB
-# ============================================================
-
-def fetch_cars_with_devices():
-    sql = """
+    cars = fetch_df("""
         SELECT
             c.CAR_ID,
-            c.VIN,
-            c.LICENSE_PLATE,
-            c.MODEL_YEAR,
-            c.ODOMETER_KM,
-            c.STATUS,
             c.BRANCH_ID,
-            b.BRANCH_NAME,
             b.CITY,
-            cat.CATEGORY_NAME,
-            d.DEVICE_ID
+            b.BRANCH_NAME,
+            c.DEVICE_ID,
+            c.ODOMETER_KM,
+            c.STATUS AS CAR_STATUS,
+            cat.CATEGORY_NAME
         FROM CARS c
-        LEFT JOIN BRANCHES b ON b.BRANCH_ID = c.BRANCH_ID
-        LEFT JOIN CAR_CATEGORIES cat ON cat.CATEGORY_ID = c.CATEGORY_ID
-        LEFT JOIN IOT_DEVICES d ON d.DEVICE_ID = c.DEVICE_ID
-    """
-    with engine.connect() as conn:
-        df = pd.read_sql(text(sql), conn)
+        JOIN BRANCHES b ON b.BRANCH_ID = c.BRANCH_ID
+        JOIN CAR_CATEGORIES cat ON cat.CATEGORY_ID = c.CATEGORY_ID
+        WHERE c.DEVICE_ID IS NOT NULL
+        ORDER BY c.BRANCH_ID, c.CAR_ID
+    """)
 
-    if df.empty:
-        print("⚠️ fetch_cars_with_devices: la requête ne retourne aucune voiture.")
-        return df
+    for df in [branches, cars]:
+        df.columns = [c.upper().strip() for c in df.columns]
 
-    orig_cols = list(df.columns)
-    df.columns = [c.upper().strip() for c in df.columns]
+    return branches, cars
 
-    # Normalisation DEVICE_ID
-    dev_col = None
-    for c in df.columns:
-        if c == "DEVICE_ID":
-            dev_col = c
-            break
-    if dev_col is None:
-        for c in df.columns:
-            if "DEVICE_ID" in c:
-                dev_col = c
-                break
+# =============================================================================
+# RESET (OPTIONAL)
+# =============================================================================
 
-    if dev_col is None:
-        print(f"⚠️ fetch_cars_with_devices: aucune colonne DEVICE_ID trouvée. Colonnes = {orig_cols}")
-        df["DEVICE_ID"] = None
-    elif dev_col != "DEVICE_ID":
-        df.rename(columns={dev_col: "DEVICE_ID"}, inplace=True)
+def reset_before_run():
+    if not RESET_BEFORE_RUN:
+        return
+    with ENGINE.begin() as conn:
+        conn.execute(text("DELETE FROM RT_IOT_FEED"))
+        conn.execute(text("DELETE FROM IOT_TELEMETRY"))
+    print("🧹 RESET done: cleared RT_IOT_FEED, IOT_TELEMETRY (RENTALS untouched).")
 
-    # Renommage FKs si besoin
-    rename_map = {}
-    for target in ["CAR_ID", "ODOMETER_KM", "BRANCH_NAME", "CITY", "CATEGORY_NAME"]:
-        if target not in df.columns:
-            for c in df.columns:
-                if target in c:
-                    rename_map[c] = target
+# =============================================================================
+# "PLAN" ONLY (NO RENTALS)
+# =============================================================================
+
+@dataclass
+class ActivityPlan:
+    branch_id: int
+    car_id: int
+    device_id: int
+    category: str
+    start_at: datetime
+    end_at: datetime
+    start_odo: float
+
+def build_week_activity_plans(anchor: datetime, cars: pd.DataFrame) -> List[ActivityPlan]:
+    plans: List[ActivityPlan] = []
+    sim_start = anchor
+    sim_end = anchor + timedelta(days=DAYS_FORWARD)
+
+    for branch_id, cars_b in cars.groupby("BRANCH_ID"):
+        cars_b = cars_b.copy()
+
+        active_mask = [random.random() > PROB_CAR_NOT_RENTED_THIS_WEEK for _ in range(len(cars_b))]
+        cars_active = cars_b.loc[active_mask]
+
+        if cars_active.empty:
+            cars_active = cars_b.sample(1)
+
+        print(f"🏢 Branch {int(branch_id)} -> cars with activity: {len(cars_active)}/{len(cars_b)}")
+
+        for _, car in cars_active.iterrows():
+            car_id = int(car["CAR_ID"])
+            device_id = int(car["DEVICE_ID"])
+            category = str(car["CATEGORY_NAME"])
+            start_odo = float(car["ODOMETER_KM"] or 0.0)
+
+            n_blocks = 1 if random.random() < 0.70 else 2
+            cursor_day = 0
+
+            for _ in range(n_blocks):
+                remaining_days = DAYS_FORWARD - cursor_day
+                if remaining_days <= 0:
                     break
-    if rename_map:
-        df.rename(columns=rename_map, inplace=True)
 
-    df["CITY"] = df.get("CITY", "CASABLANCA").fillna("CASABLANCA")
-    df["CATEGORY_NAME"] = df.get("CATEGORY_NAME", "ECONOMY").fillna("ECONOMY")
-    df["ODOMETER_KM"] = df.get("ODOMETER_KM", 0).fillna(0).astype(float)
+                gap = random.randint(0, 1)
+                cursor_day += gap
+                if cursor_day >= DAYS_FORWARD:
+                    break
 
-    # Garder seulement les cars avec DEVICE_ID
-    df = df[df["DEVICE_ID"].notna()].copy()
+                remaining_days = DAYS_FORWARD - cursor_day
+                dur_days = sample_rental_days(remaining_days)
 
-    print(f"📦 Loaded {len(df)} cars with IoT devices. (Colonnes réelles: {list(df.columns)})")
-    return df
+                day0 = (sim_start + timedelta(days=cursor_day)).date()
+                win_start = sim_start if day0 == sim_start.date() else None
+                start_at = random_start_time_for_day(day0, win_start=win_start)
 
-# ============================================================
-# TRIP SIMULATION (BI-FRIENDLY)
-# ============================================================
+                end_at = start_at + timedelta(days=dur_days)
+                if end_at > sim_end:
+                    end_at = sim_end
 
-def generate_trip_points(
-    car_row,
-    trip_id,
-    trip_start_dt,
-    trip_duration_min,
-    base_odometer_km,
-    initial_fuel_pct,
-):
-    category = car_row["CATEGORY_NAME"]
-    car_id = int(car_row["CAR_ID"])
-    device_id = int(car_row["DEVICE_ID"])
-    branch_name = car_row["BRANCH_NAME"]
-    city = car_row["CITY"]
+                plans.append(ActivityPlan(
+                    branch_id=int(branch_id),
+                    car_id=car_id,
+                    device_id=device_id,
+                    category=category,
+                    start_at=start_at,
+                    end_at=end_at,
+                    start_odo=start_odo,
+                ))
 
-    lat0, lon0 = get_city_center(city)
-    _trip_type = pick_trip_type()
+                cursor_day += max(1, dur_days)
 
-    total_seconds = trip_duration_min * 60
-    steps = max(1, total_seconds // IOT_INTERVAL_SECONDS)
+    # Force at least one activity at anchor
+    if not plans:
+        raise RuntimeError("No activity plans generated (unexpected).")
 
-    route_coords = build_road_route_for_trip(city, steps, lat0, lon0)
-    n_coords = len(route_coords)
-
-    step_dists_km = [0.0]
-    for (lat1, lon1), (lat2, lon2) in zip(route_coords[:-1], route_coords[1:]):
-        step_dists_km.append(haversine_km(lat1, lon1, lat2, lon2))
-
-    rows = []
-    ts = trip_start_dt
-    odometer_km = base_odometer_km
-    fuel_pct = initial_fuel_pct
-    engine_temp = None
-    prev_speed_kmh = None
-
-    # ENGINE_START
-    lat, lon = route_coords[0]
-    speed_kmh = 0.0
-    acc_ms2 = 0.0
-    brake_pressure = 0.0
-    engine_temp = simulate_engine_temp(engine_temp, speed_kmh, is_engine_on=True)
-    battery_v = simulate_battery_voltage(is_engine_on=True)
-
-    rows.append(
-        dict(
-            DEVICE_ID=device_id,
-            CAR_ID=car_id,
-            RENTAL_ID=trip_id,
-            TIMESTAMP=ts,
-            LATITUDE=lat,
-            LONGITUDE=lon,
-            SPEED_KMH=speed_kmh,
-            ACCELERATION_MS2=acc_ms2,
-            BRAKE_PRESSURE_BAR=brake_pressure,
-            FUEL_LEVEL_PCT=fuel_pct,
-            BATTERY_VOLTAGE=battery_v,
-            ENGINE_TEMP_C=engine_temp,
-            ODOMETER_KM=odometer_km,
-            EVENT_TYPE="ENGINE_START",
-            BRANCH_NAME=branch_name,
-            CITY=city,
-        )
+    p0 = plans[0]
+    plans[0] = ActivityPlan(
+        branch_id=p0.branch_id,
+        car_id=p0.car_id,
+        device_id=p0.device_id,
+        category=p0.category,
+        start_at=anchor,
+        end_at=min(anchor + timedelta(days=2), sim_end),
+        start_odo=p0.start_odo,
     )
 
-    for step in range(1, n_coords):
-        ts += timedelta(seconds=IOT_INTERVAL_SECONDS)
+    plans.sort(key=lambda x: (x.start_at, x.branch_id, x.car_id))
+    return plans
 
-        dist_km = step_dists_km[step]
-        if dist_km > 0:
-            speed_kmh = dist_km * 3600.0 / IOT_INTERVAL_SECONDS
+# =============================================================================
+# TELEMETRY GENERATION (RENTAL_ID=NULL)
+# =============================================================================
+
+def generate_trip_telemetry(
+    device_id: int,
+    car_id: int,
+    rental_id: Optional[int],
+    category: str,
+    city: str,
+    start_dt: datetime,
+    duration_min: int,
+    start_lat: float,
+    start_lon: float,
+    start_odo: float,
+    start_fuel: float,
+) -> Tuple[List[dict], float, float, float, float]:
+
+    trip_type = pick_trip_type()
+    steps = max(1, int((duration_min * 60) / IOT_INTERVAL_SECONDS))
+
+    rows: List[dict] = []
+    ts = start_dt
+    lat, lon = start_lat, start_lon
+    odo = start_odo
+    fuel = start_fuel
+    eng_temp = None
+    prev_speed = None
+
+    rows.append({
+        "DEVICE_ID": device_id,
+        "CAR_ID": car_id,
+        "RENTAL_ID": rental_id,  # NULL
+        "EVENT_TS": ts,
+        "LATITUDE": lat,
+        "LONGITUDE": lon,
+        "SPEED_KMH": 0.0,
+        "ACCELERATION_MS2": 0.0,
+        "BRAKE_PRESSURE_BAR": 0.0,
+        "FUEL_LEVEL_PCT": float(fuel),
+        "BATTERY_VOLTAGE": float(simulate_battery_voltage(True)),
+        "ENGINE_TEMP_C": float(simulate_engine_temp(eng_temp, 0.0, True)),
+        "ODOMETER_KM": float(odo),
+        "EVENT_TYPE": "ENGINE_START",
+    })
+
+    for _ in range(1, steps + 1):
+        ts = ts + timedelta(seconds=IOT_INTERVAL_SECONDS)
+
+        target_speed = sample_speed_kmh(category, trip_type)
+        if prev_speed is None:
+            speed = target_speed * random.uniform(0.6, 0.9)
         else:
-            speed_kmh = 0.0
+            speed = prev_speed + (target_speed - prev_speed) * random.uniform(0.15, 0.35)
+        speed = clamp(speed, 0.0, 160.0)
 
-        acc_ms2 = compute_acceleration(prev_speed_kmh, speed_kmh, IOT_INTERVAL_SECONDS)
-        prev_speed_kmh = speed_kmh
+        dist_km = speed * IOT_INTERVAL_SECONDS / 3600.0
 
-        brake_pressure = compute_brake_pressure(acc_ms2)
+        bearing = random.uniform(0, 2 * math.pi)
+        dlat = (dist_km / 111.0) * math.cos(bearing)
+        dlon = (dist_km / (111.0 * max(0.2, math.cos(math.radians(lat))))) * math.sin(bearing)
 
-        odometer_km += dist_km
-        fuel_pct = update_fuel_level(fuel_pct, category, speed_kmh, IOT_INTERVAL_SECONDS)
+        city_lat, city_lon = get_city_center(city)
+        drift_lat = (city_lat - lat) * 0.02
+        drift_lon = (city_lon - lon) * 0.02
 
-        engine_temp = simulate_engine_temp(engine_temp, speed_kmh, is_engine_on=True)
-        battery_v = simulate_battery_voltage(is_engine_on=True)
+        new_lat = lat + dlat + drift_lat
+        new_lon = lon + dlon + drift_lon
 
-        lat, lon = route_coords[step]
+        true_dist = haversine_km(lat, lon, new_lat, new_lon)
+        odo += true_dist
 
-        if speed_kmh < 3.0:
-            event_type = "IDLE"
-        else:
-            event_type = "DRIVING"
+        acc = compute_acc_ms2(prev_speed, speed, IOT_INTERVAL_SECONDS)
+        prev_speed = speed
 
-        rows.append(
-            dict(
-                DEVICE_ID=device_id,
-                CAR_ID=car_id,
-                RENTAL_ID=trip_id,
-                TIMESTAMP=ts,
-                LATITUDE=lat,
-                LONGITUDE=lon,
-                SPEED_KMH=speed_kmh,
-                ACCELERATION_MS2=acc_ms2,
-                BRAKE_PRESSURE_BAR=brake_pressure,
-                FUEL_LEVEL_PCT=fuel_pct,
-                BATTERY_VOLTAGE=battery_v,
-                ENGINE_TEMP_C=engine_temp,
-                ODOMETER_KM=odometer_km,
-                EVENT_TYPE=event_type,
-                BRANCH_NAME=branch_name,
-                CITY=city,
-            )
-        )
+        fuel = update_fuel_pct(fuel, category, speed, IOT_INTERVAL_SECONDS)
+        eng_temp = simulate_engine_temp(eng_temp, speed, True)
+        bpress = brake_pressure_bar(acc)
 
-    # ENGINE_STOP
-    last = rows[-1].copy()
-    last["TIMESTAMP"] += timedelta(seconds=IOT_INTERVAL_SECONDS)
-    last["EVENT_TYPE"] = "ENGINE_STOP"
-    last["SPEED_KMH"] = 0.0
-    last["ACCELERATION_MS2"] = 0.0
-    last["BRAKE_PRESSURE_BAR"] = 0.0
-    last["BATTERY_VOLTAGE"] = simulate_battery_voltage(is_engine_on=False)
-    rows.append(last)
+        rows.append({
+            "DEVICE_ID": device_id,
+            "CAR_ID": car_id,
+            "RENTAL_ID": rental_id,
+            "EVENT_TS": ts,
+            "LATITUDE": new_lat,
+            "LONGITUDE": new_lon,
+            "SPEED_KMH": float(speed),
+            "ACCELERATION_MS2": float(acc),
+            "BRAKE_PRESSURE_BAR": float(bpress),
+            "FUEL_LEVEL_PCT": float(fuel),
+            "BATTERY_VOLTAGE": float(simulate_battery_voltage(True)),
+            "ENGINE_TEMP_C": float(eng_temp),
+            "ODOMETER_KM": float(odo),
+            "EVENT_TYPE": "DRIVING" if speed >= 5 else "IDLE",
+        })
 
-    # REFUEL éventuel
-    if fuel_pct < 15.0:
-        ref_ts = rows[-1]["TIMESTAMP"] + timedelta(minutes=5)
-        ref_row = rows[-1].copy()
-        ref_row["TIMESTAMP"] = ref_ts
-        ref_row["EVENT_TYPE"] = "REFUEL"
-        ref_row["SPEED_KMH"] = 0.0
-        ref_row["ACCELERATION_MS2"] = 0.0
-        ref_row["BRAKE_PRESSURE_BAR"] = 0.0
-        ref_row["FUEL_LEVEL_PCT"] = 100.0
-        ref_row["BATTERY_VOLTAGE"] = simulate_battery_voltage(is_engine_on=False)
-        rows.append(ref_row)
-        fuel_pct = 100.0
+        lat, lon = new_lat, new_lon
 
-    final_odometer = rows[-1]["ODOMETER_KM"]
-    final_fuel = rows[-1]["FUEL_LEVEL_PCT"]
-    return rows, final_odometer, final_fuel
+    ts = ts + timedelta(seconds=IOT_INTERVAL_SECONDS)
+    rows.append({
+        "DEVICE_ID": device_id,
+        "CAR_ID": car_id,
+        "RENTAL_ID": rental_id,
+        "EVENT_TS": ts,
+        "LATITUDE": lat,
+        "LONGITUDE": lon,
+        "SPEED_KMH": 0.0,
+        "ACCELERATION_MS2": 0.0,
+        "BRAKE_PRESSURE_BAR": 0.0,
+        "FUEL_LEVEL_PCT": float(fuel),
+        "BATTERY_VOLTAGE": float(simulate_battery_voltage(False)),
+        "ENGINE_TEMP_C": float(simulate_engine_temp(eng_temp, 0.0, False)),
+        "ODOMETER_KM": float(odo),
+        "EVENT_TYPE": "ENGINE_STOP",
+    })
 
-# ============================================================
-# RENTAL-LEVEL SIMULATION
-# ============================================================
+    if fuel < 12.0 and CATEGORY_FUEL_CONS.get(category.upper(), 0.0) > 0:
+        ts = ts + timedelta(minutes=8)
+        fuel = 100.0
+        rows.append({
+            "DEVICE_ID": device_id,
+            "CAR_ID": car_id,
+            "RENTAL_ID": rental_id,
+            "EVENT_TS": ts,
+            "LATITUDE": lat,
+            "LONGITUDE": lon,
+            "SPEED_KMH": 0.0,
+            "ACCELERATION_MS2": 0.0,
+            "BRAKE_PRESSURE_BAR": 0.0,
+            "FUEL_LEVEL_PCT": float(fuel),
+            "BATTERY_VOLTAGE": float(simulate_battery_voltage(False)),
+            "ENGINE_TEMP_C": float(simulate_engine_temp(eng_temp, 0.0, False)),
+            "ODOMETER_KM": float(odo),
+            "EVENT_TYPE": "REFUEL",
+        })
 
-def simulate_car_for_period(car_row, start_dt, days_forward):
-    all_rows = []
-    car_id = int(car_row["CAR_ID"])
-    print(f"🚗 Simulating car {car_id} ({car_row['LICENSE_PLATE']})")
+    return rows, odo, fuel, lat, lon
 
-    # Certaines voitures ne seront jamais louées ce mois-ci
-    if random.random() < PROB_CAR_NEVER_RENTED:
-        print(f"   ➜ Car {car_id} has no rentals this period (parking/maintenance).")
-        return all_rows
+def generate_activity_telemetry(plan: ActivityPlan, city: str) -> Tuple[List[dict], float]:
+    rows: List[dict] = []
 
-    odometer_km = float(car_row["ODOMETER_KM"])
-    fuel_pct = 100.0
+    device_id = plan.device_id
+    car_id = plan.car_id
+    category = plan.category
+    start = plan.start_at
+    end = plan.end_at
 
-    rental_counter = 1
-    day_index = 0
+    lat, lon = get_city_center(city)
+    odo = float(plan.start_odo)
+    fuel = 100.0
 
-    while day_index < days_forward:
-        # Gap de jours sans location
-        if random.random() < 0.3:
-            gap_days = random.randint(1, 2)
-            day_index += gap_days
-            if day_index >= days_forward:
-                break
+    # Marker: ACTIVITY_START (not a rental)
+    rows.append({
+        "DEVICE_ID": device_id,
+        "CAR_ID": car_id,
+        "RENTAL_ID": None,
+        "EVENT_TS": start,
+        "LATITUDE": lat,
+        "LONGITUDE": lon,
+        "SPEED_KMH": 0.0,
+        "ACCELERATION_MS2": 0.0,
+        "BRAKE_PRESSURE_BAR": 0.0,
+        "FUEL_LEVEL_PCT": float(fuel),
+        "BATTERY_VOLTAGE": float(simulate_battery_voltage(False)),
+        "ENGINE_TEMP_C": 25.0,
+        "ODOMETER_KM": float(odo),
+        "EVENT_TYPE": "ACTIVITY_START",
+    })
 
-        remaining_days = days_forward - day_index
-        rental_days = sample_rental_duration(remaining_days)
-        rental_id = rental_counter
-        rental_counter += 1
+    cur_day = start.date()
+    last_day = end.date()
 
-        for offset in range(rental_days):
-            if day_index + offset >= days_forward:
-                break
+    while cur_day <= last_day:
+        day_start = datetime.combine(cur_day, time(DAY_START_HOUR, 0))
+        day_end = datetime.combine(cur_day, time(DAY_END_HOUR, 0))
 
-            # Day derived from the datetime anchor
-            day = (start_dt + timedelta(days=day_index + offset)).date()
+        win_start = max(day_start, start)
+        win_end = min(day_end, end)
 
+        if win_start < win_end:
             r = random.random()
             if r < P_NO_TRIP:
                 trips_today = 0
@@ -661,127 +519,165 @@ def simulate_car_for_period(car_row, start_dt, days_forward):
             else:
                 trips_today = 2
 
-            if trips_today == 0:
-                continue
-
-            # ✅ day 0: allow starts from start_dt (so you get activity right away)
-            if day == start_dt.date():
-                windows = build_allowed_windows_for_day(min_start_dt=start_dt)
-            else:
-                windows = build_allowed_windows_for_day()
-
             for _ in range(trips_today):
-                start_minute = sample_start_minute_from_windows(windows)
+                if (win_end - win_start).total_seconds() < 30 * 60:
+                    continue
 
-                latest_start = DAY_END_HOUR * 60 - 30
-                start_minute = min(start_minute, latest_start)
-
-                trip_start_dt = datetime.combine(day, datetime.min.time()) + timedelta(minutes=start_minute)
-
-                # ✅ Force first day to not start before now+5min
-                if day == start_dt.date() and trip_start_dt < start_dt:
-                    trip_start_dt = start_dt
-
-                trip_duration_min = random.randint(TRIP_DURATION_MIN_MIN, TRIP_DURATION_MIN_MAX)
-
-                rows, odometer_km, fuel_pct = generate_trip_points(
-                    car_row,
-                    trip_id=rental_id,
-                    trip_start_dt=trip_start_dt,
-                    trip_duration_min=trip_duration_min,
-                    base_odometer_km=odometer_km,
-                    initial_fuel_pct=fuel_pct,
+                t0 = win_start + timedelta(
+                    minutes=random.randint(0, int((win_end - win_start).total_seconds() // 60) - 20)
                 )
-                all_rows.extend(rows)
+                dur = random.randint(TRIP_DURATION_MIN_MIN, TRIP_DURATION_MIN_MAX)
 
-        day_index += rental_days
+                if t0 + timedelta(minutes=dur) > win_end:
+                    dur = max(10, int((win_end - t0).total_seconds() // 60) - 2)
+                if dur < 10:
+                    continue
 
-    return all_rows
+                trip_rows, odo, fuel, lat, lon = generate_trip_telemetry(
+                    device_id=device_id,
+                    car_id=car_id,
+                    rental_id=None,
+                    category=category,
+                    city=city,
+                    start_dt=t0,
+                    duration_min=dur,
+                    start_lat=lat,
+                    start_lon=lon,
+                    start_odo=odo,
+                    start_fuel=fuel,
+                )
+                rows.extend(trip_rows)
 
-# ============================================================
-# WRITE TO ORACLE
-# ============================================================
-def write_telemetry_to_oracle(all_rows):
-    df = pd.DataFrame(all_rows)
-    if df.empty:
-        print("⚠️ write_telemetry_to_oracle: dataframe vide, rien à insérer.")
+        cur_day += timedelta(days=1)
+
+    rows.append({
+        "DEVICE_ID": device_id,
+        "CAR_ID": car_id,
+        "RENTAL_ID": None,
+        "EVENT_TS": end,
+        "LATITUDE": lat,
+        "LONGITUDE": lon,
+        "SPEED_KMH": 0.0,
+        "ACCELERATION_MS2": 0.0,
+        "BRAKE_PRESSURE_BAR": 0.0,
+        "FUEL_LEVEL_PCT": float(fuel),
+        "BATTERY_VOLTAGE": float(simulate_battery_voltage(False)),
+        "ENGINE_TEMP_C": 25.0,
+        "ODOMETER_KM": float(odo),
+        "EVENT_TYPE": "ACTIVITY_END",
+    })
+
+    return rows, odo
+
+def ensure_immediate_activity(car_id: int, device_id: int, category: str, city: str, anchor: datetime, start_odo: float) -> List[dict]:
+    lat, lon = get_city_center(city)
+    t0 = anchor + timedelta(minutes=2)
+    dur = random.randint(10, 15)
+
+    rows, *_ = generate_trip_telemetry(
+        device_id=device_id,
+        car_id=car_id,
+        rental_id=None,
+        category=category,
+        city=city,
+        start_dt=t0,
+        duration_min=dur,
+        start_lat=lat,
+        start_lon=lon,
+        start_odo=float(start_odo),
+        start_fuel=100.0,
+    )
+    return rows
+
+# =============================================================================
+# WRITE
+# =============================================================================
+
+def write_telemetry_rows(conn, rows: List[dict]):
+    if not rows:
         return
+    df = pd.DataFrame(rows)
+    df.sort_values(["EVENT_TS", "CAR_ID", "DEVICE_ID"], inplace=True)
+    df["CREATED_AT"] = df["EVENT_TS"]
 
-    df.sort_values(["TIMESTAMP", "CAR_ID", "DEVICE_ID"], inplace=True)
-    df["CREATED_AT"] = df["TIMESTAMP"]
-
-    print(f"📝 Préparation insert Oracle : {len(df):,} lignes")
-
-    # On garde uniquement les colonnes qui existent dans IOT_TELEMETRY
     df_db = df[[
-        "DEVICE_ID",
-        "CAR_ID",
-        "RENTAL_ID",
-        "TIMESTAMP",          # sera renommé en EVENT_TS
-        "LATITUDE",
-        "LONGITUDE",
-        "SPEED_KMH",
-        "ACCELERATION_MS2",
-        "BRAKE_PRESSURE_BAR",
-        "FUEL_LEVEL_PCT",
-        "BATTERY_VOLTAGE",
-        "ENGINE_TEMP_C",
-        "ODOMETER_KM",
-        "EVENT_TYPE",
-        "CREATED_AT",
+        "DEVICE_ID","CAR_ID","RENTAL_ID","EVENT_TS","LATITUDE","LONGITUDE",
+        "SPEED_KMH","ACCELERATION_MS2","BRAKE_PRESSURE_BAR","FUEL_LEVEL_PCT",
+        "BATTERY_VOLTAGE","ENGINE_TEMP_C","ODOMETER_KM","EVENT_TYPE","CREATED_AT"
     ]].copy()
 
-    df_db.rename(columns={"TIMESTAMP": "EVENT_TS"}, inplace=True)
+    df_db.to_sql("IOT_TELEMETRY", conn, if_exists="append", index=False, chunksize=5000)
 
-    with engine.begin() as conn:
-        # 💣 TRUNCATE AVANT INSERT — comme tu le voulais
-        conn.execute(text("TRUNCATE TABLE IOT_TELEMETRY"))
-        print("🧹 TRUNCATE IOT_TELEMETRY")
+    if FILL_RT_IOT_FEED:
+        rt_rows = []
+        for car_id, g in df.groupby("CAR_ID"):
+            g = g.sort_values("EVENT_TS").tail(RT_KEEP_LAST_N_ROWS_PER_CAR)
+            rt_rows.append(g)
+        rt = pd.concat(rt_rows, ignore_index=True)
 
-        # ⚠️ IMPORTANT : PAS de method="multi" avec Oracle
-        df_db.to_sql(
-            "IOT_TELEMETRY",
-            conn,
-            if_exists="append",
-            index=False,
-            chunksize=5000,   # on garde le chunking mais sans 'multi'
-        )
+        rt_db = rt[[
+            "DEVICE_ID","CAR_ID","RENTAL_ID","EVENT_TS","LATITUDE","LONGITUDE",
+            "SPEED_KMH","ACCELERATION_MS2","BRAKE_PRESSURE_BAR","FUEL_LEVEL_PCT",
+            "BATTERY_VOLTAGE","ENGINE_TEMP_C","ODOMETER_KM","EVENT_TYPE","CREATED_AT"
+        ]].copy()
 
-    print("✅ Insert Oracle terminé.")
+        rt_db.insert(0, "TELEMETRY_ID", None)
+        rt_db.to_sql("RT_IOT_FEED", conn, if_exists="append", index=False, chunksize=5000)
 
-# ============================================================
-# MAIN GENERATION LOGIC
-# ============================================================
+# =============================================================================
+# MAIN
+# =============================================================================
 
-def generate_iot_telemetry_db():
-    setup_random_seed()
-    start_dt = get_start_datetime_now_plus_5min()
-    days_forward = DAYS_FORWARD
+def main():
+    set_seed()
+    reset_before_run()
 
-    print(f"📅 Generating telemetry starting at {start_dt} for {days_forward} days (~1 month).")
+    anchor = now_anchor()
+    sim_end = anchor + timedelta(days=DAYS_FORWARD)
+    print(f"📅 Simulating IoT ONLY next week: {anchor} -> {sim_end}")
 
-    cars_df = fetch_cars_with_devices()
-    if cars_df.empty:
-        print("⚠️ Aucun véhicule IoT trouvé en base.")
-        return
+    branches, cars = load_reference_data()
+    if cars.empty:
+        raise RuntimeError("No cars with devices found (CARS.DEVICE_ID IS NULL).")
 
-    all_rows = []
+    plans = build_week_activity_plans(anchor, cars)
+    print(f"🧾 Activity plans generated: {len(plans)}")
 
-    for _, car_row in cars_df.iterrows():
-        rows = simulate_car_for_period(car_row, start_dt, days_forward)
-        all_rows.extend(rows)
+    total_rows = 0
 
-    if not all_rows:
-        print("⚠️ Aucun point de télémétrie généré.")
-        return
+    with ENGINE.begin() as conn:
+        if not RESET_BEFORE_RUN and FILL_RT_IOT_FEED:
+            conn.execute(text("DELETE FROM RT_IOT_FEED"))
 
-    print(f"📈 Generated {len(all_rows):,} telemetry points. Insertion en base...")
-    write_telemetry_to_oracle(all_rows)
-    print("🎉 IoT telemetry generation + DB insert completed.")
+        forced_done = False
 
-# ============================================================
-# ENTRYPOINT
-# ============================================================
+        for plan in plans:
+            branch_city = str(branches.loc[branches["BRANCH_ID"] == plan.branch_id, "CITY"].iloc[0])
+
+            tele_rows, _final_odo = generate_activity_telemetry(plan, branch_city)
+
+            # ensure some immediate activity right after run (only once)
+            if not forced_done and plan.start_at == anchor:
+                tele_rows.extend(ensure_immediate_activity(
+                    car_id=plan.car_id,
+                    device_id=plan.device_id,
+                    category=plan.category,
+                    city=branch_city,
+                    anchor=anchor,
+                    start_odo=plan.start_odo,
+                ))
+                forced_done = True
+
+            write_telemetry_rows(conn, tele_rows)
+            total_rows += len(tele_rows)
+
+            print(f"✅ CAR_ID={plan.car_id} | BRANCH={plan.branch_id} | tele={len(tele_rows)} rows")
+
+    print("=============================================================")
+    print("🎉 Done. IoT telemetry generated (NO RENTALS created).")
+    print(f"📈 Telemetry rows inserted: {total_rows:,}")
+    print(f"🗓️ Window: {anchor} -> {sim_end}")
+    print("=============================================================")
 
 if __name__ == "__main__":
-    generate_iot_telemetry_db()
+    main()
