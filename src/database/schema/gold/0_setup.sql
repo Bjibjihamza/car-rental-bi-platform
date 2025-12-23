@@ -1,0 +1,15 @@
+-- ======================================================================
+-- 0_setup.sql — GOLD LAYER setup
+-- ======================================================================
+WHENEVER SQLERROR CONTINUE
+SET DEFINE OFF
+SET SERVEROUTPUT ON SIZE UNLIMITED
+SET FEEDBACK ON
+SET VERIFY OFF
+SET PAGESIZE 200
+SET LINESIZE 200
+ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD';
+ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF3';
+
+ALTER SESSION SET CURRENT_SCHEMA = GOLD_LAYER;
+PROMPT [OK] Session set to GOLD_LAYER
