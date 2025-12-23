@@ -4,28 +4,32 @@ A comprehensive Business Intelligence platform for car rental operations featuri
 
 ## 📋 Table of Contents
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Features](#features)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Database Setup](#database-setup)
-- [Data Generation](#data-generation)
-- [Project Structure](#project-structure)
-- [API Documentation](#api-documentation)
-- [Technologies](#technologies)
-- [Contributing](#contributing)
+* [Overview](#overview)
+* [Architecture](#architecture)
+* [Features](#features)
+* [Prerequisites](#prerequisites)
+* [Installation](#installation)
+* [Database Setup](#database-setup)
+* [Data Generation](#data-generation)
+* [Project Structure](#project-structure)
+* [API Documentation](#api-documentation)
+* [Technologies](#technologies)
+* [Contributing](#contributing)
 
 ---
 
 ## 🎯 Overview
 
 This platform provides end-to-end fleet management capabilities with:
-- **Real-time IoT monitoring** of vehicle telemetry (GPS, speed, fuel, engine metrics)
-- **Medallion architecture** (Bronze → Silver → Gold) for data quality and analytics
-- **Multi-branch operations** across 5 major Moroccan cities
-- **Role-based access control** (Supervisor, Branch Managers)
-- **Live digital twin replay** from historical telemetry data
+
+* **Real-time IoT monitoring** of vehicle telemetry (GPS, speed, fuel, engine metrics)
+* **Medallion architecture** (Bronze → Silver → Gold) for data quality and analytics
+* **Multi-branch operations** across 5 major Moroccan cities
+* **Role-based access control** (Supervisor, Branch Managers)
+* **Live digital twin replay** from telemetry data (live buffer)
+
+> **Current project mode (Synthetic Data):**
+> We temporarily **skip Bronze ingestion**. The operational model is created directly in **Silver** using `silver.sql`, and analytics are built in **Gold** using `gold.sql`.
 
 ---
 
@@ -35,70 +39,72 @@ This platform provides end-to-end fleet management capabilities with:
 
 ```
 ┌─────────────┐
-│   BRONZE    │  Raw ingestion (IoT sensors, transactions)
-│ (RAW_LAYER) │  Tables: IOT_TELEMETRY, RENTALS, CARS, etc.
+│   BRONZE    │  (Empty for now)
+│ (RAW_LAYER) │  Will be used when real ingestion is added
+└──────┬──────┘
+       │ (future ETL)
+       ▼
+┌─────────────┐
+│   SILVER    │  Operational model (synthetic demo data)
+│(SILVER_LAYER)│  Tables: BRANCHES, CARS, RENTALS, IOT_TELEMETRY, RT_IOT_FEED...
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
-│   SILVER    │  Cleaned, validated, deduplicated
-│(SILVER_LAYER)│  (Future ETL transformations)
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│    GOLD     │  Business aggregates, KPIs, analytics
+│    GOLD     │  BI-ready facts, dimensions, KPIs, wide views
 │ (GOLD_LAYER)│  Optimized for reporting/dashboards
 └─────────────┘
 ```
 
 ### Tech Stack
 
-- **Database**: Oracle 21c XE (Pluggable Database: XEPDB1)
-- **Backend API**: Node.js + Express + oracledb driver
-- **Frontend**: React + TypeScript + Vite + Tailwind CSS
-- **Data Generation**: Python (SQLAlchemy, Pandas, OSMnx for routing)
-- **Containerization**: Docker + Docker Compose
+* **Database**: Oracle 21c XE (Pluggable DB: XEPDB1)
+* **Backend API**: Node.js + Express + oracledb driver
+* **Frontend**: React + TypeScript + Vite + Tailwind CSS
+* **Data Generation**: Python (synthetic seed + live simulator)
+* **Containerization**: Docker + Docker Compose
 
 ---
 
 ## ✨ Features
 
 ### 🔐 Authentication & Authorization
-- Supervisor (global access) and Branch Manager roles
-- JWT-based session management
-- Branch-scoped data isolation for managers
+
+* Supervisor (global access) and Branch Manager roles
+* JWT-based session management
+* Branch-scoped data isolation for managers
 
 ### 🚙 Fleet Management
-- 55 vehicles across 5 branches (Casablanca, Rabat, Marrakech, Tangier, Agadir)
-- 5 vehicle categories: Economy, SUV, Luxury, Van, Electric
-- Real-time vehicle status tracking (Available, Rented, Maintenance)
+
+* Vehicles across branches (Casablanca, Rabat, Marrakech, Tangier, Agadir)
+* Multiple vehicle categories: Economy, SUV, Luxury, Van, Electric
+* Vehicle status tracking (Available, Rented, Maintenance)
 
 ### 📡 IoT Telemetry
-- **30-second interval** data capture from 50 IoT devices
-- Metrics: GPS coordinates, speed, acceleration, fuel level, engine temp, battery voltage
-- Event types: `ENGINE_START`, `DRIVING`, `IDLE`, `ENGINE_STOP`, `REFUEL`
-- OSM-based realistic route simulation with city-specific road networks
 
-### 📊 Analytics & Reporting
-- Rental performance by branch/category
-- Fleet utilization rates
-- Revenue analytics
-- Maintenance alerts from telemetry anomalies
+* Telemetry metrics: GPS, speed, acceleration, fuel, engine temperature, odometer
+* Real-time buffer table: `RT_IOT_FEED`
+* Historical telemetry table: `IOT_TELEMETRY`
+
+### 📊 Analytics & Reporting (Gold)
+
+* Gold Dimensions: Date, Branch, Manager, Category, Car, Customer, Device
+* Gold Facts: Rentals, Alerts, Telemetry Daily, Car Status Snap Daily
+* Wide BI Views and KPI Views (dashboards-ready)
 
 ### 🎮 Live Monitor (Digital Twin)
-- Real-time replay of historical telemetry via `RT_IOT_FEED` table
-- Simulates live streaming with configurable speedup (1x, 2x, etc.)
-- Synchronized rental status updates
+
+* Live “stream” simulation into `RT_IOT_FEED`
+* Used by Live Monitor page for near-real-time experience
 
 ---
 
 ## 📦 Prerequisites
 
-- **Docker Desktop** (Windows/Mac) or Docker Engine (Linux)
-- **Git**
-- **Python 3.11+** (for data generation scripts)
-- **Node.js 20+** (if running API/frontend outside Docker)
+* **Docker Desktop** (Windows/Mac) or Docker Engine (Linux)
+* **Git**
+* **Python 3.11+** (for generator scripts)
+* **Node.js 20+** (if running API/frontend outside Docker)
 
 ---
 
@@ -113,12 +119,12 @@ cd car-rental-bi-platform
 
 ### 2. Environment Configuration
 
-Edit `.env` file (or keep defaults):
+Edit `.env` (or keep defaults):
 
 ```bash
 # Oracle Database
-ORACLE_USER=raw_layer
-ORACLE_PASSWORD=Raw#123
+ORACLE_USER=silver_layer
+ORACLE_PASSWORD=Silver#123
 ORACLE_DSN=localhost:1521/XEPDB1
 
 # API
@@ -129,18 +135,15 @@ JWT_SECRET=your-secret-key-change-in-production
 VITE_API_URL=http://localhost:5001/api
 ```
 
+> Note: **App should connect to SILVER** (current working layer for synthetic data).
+
 ### 3. Start Services
 
 ```bash
 docker compose up -d --build
 ```
 
-This will:
-- Pull Oracle 21c XE image (~2.7GB)
-- Build API and frontend images
-- Start 3 containers: `oracle-xe`, `api`, `frontend`
-
-**Wait ~2 minutes** for Oracle to initialize. Check logs:
+Wait for Oracle to initialize:
 
 ```bash
 docker logs --tail 50 car-rental-bi-platform-oracle-xe-1
@@ -152,116 +155,96 @@ Look for: `DATABASE IS READY TO USE!`
 
 ## 🗄️ Database Setup
 
-### Step 1: Create Medallion Schema
+### Step 1: Create Medallion Users & Tablespaces
 
-Connect as SYSTEM and provision RAW/SILVER/GOLD users:
-
-```bash
-docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc "sqlplus -s system/Admin#123@localhost:1521/XEPDB1 @/scripts/scripts/oracle_medallion_setup.sql"
-
-```
-
-**Creates**:
-- 3 tablespaces: `raw_ts`, `silver_ts`, `gold_ts`
-- 3 users: `raw_layer`, `silver_layer`, `gold_layer`
-
-### Step 2: Build Bronze Layer Tables
-
-```bash
-docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc "sqlplus -s raw_layer/Raw#123@localhost:1521/XEPDB1 @/scripts/schema/bronze.sql"
-```
-
-**Creates** (in `RAW_LAYER` schema):
-- `BRANCHES`, `MANAGERS`, `CAR_CATEGORIES`, `IOT_DEVICES`
-- `CARS`, `CUSTOMERS`, `RENTALS`
-- `IOT_TELEMETRY` (historical), `RT_IOT_FEED` (live buffer)
-- `IOT_ALERTS`
-
-### Step 3: Verify Schema
+This creates: `RAW_LAYER`, `SILVER_LAYER`, `GOLD_LAYER` + their tablespaces.
 
 ```bash
 docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
-  "sqlplus raw_layer/Raw#123@localhost:1521/XEPDB1"
+  "sqlplus -s system/Admin#123@localhost:1521/XEPDB1 @/scripts/scripts/oracle_medallion_setup.sql"
 ```
 
-```sql
-SELECT table_name FROM user_tables ORDER BY table_name;
--- Should list: BRANCHES, CARS, CUSTOMERS, IOT_DEVICES, IOT_TELEMETRY, MANAGERS, RENTALS, RT_IOT_FEED, etc.
+### Step 2: Build SILVER Layer (Operational Model)
+
+⚠️ **Bronze is intentionally empty** for now.
+We create all operational tables directly in `SILVER_LAYER`:
+
+```bash
+docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
+  "sqlplus -s silver_layer/Silver#123@localhost:1521/XEPDB1 @/scripts/schema/silver.sql"
+```
+
+**Creates (in SILVER_LAYER):**
+
+* `BRANCHES`, `MANAGERS`, `CAR_CATEGORIES`, `IOT_DEVICES`
+* `CARS`, `CUSTOMERS`, `RENTALS`
+* `IOT_TELEMETRY` (historical telemetry)
+* `RT_IOT_FEED` (real-time buffer)
+* `IOT_ALERTS`
+* * seeds default Supervisor in `MANAGERS`
+
+### Step 3: Build GOLD Layer (Analytics)
+
+Deploy Gold (facts, dims, views, KPI views, package loader):
+
+```bash
+docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
+  "sqlplus -s gold_layer/Gold#123@localhost:1521/XEPDB1 @/scripts/schema/gold.sql"
+```
+
+✅ You should see:
+
+* `[OK] Dimensions created`
+* `[OK] Facts created`
+* `[OK] Gold wide views created`
+* `[OK] KPI views created`
+* `[OK] GOLD layer fully deployed`
+
+### Step 4: Quick Verification
+
+```bash
+docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
+  "sqlplus -s silver_layer/Silver#123@localhost:1521/XEPDB1 <<'SQL'
+  SET PAGESIZE 200
+  SELECT table_name FROM user_tables ORDER BY table_name;
+  SQL"
 ```
 
 ---
 
-## 🎲 Data Generation
+## 🎲 Data Generation (Synthetic)
 
-### Prerequisites (Python Environment)
+### Python Dependencies
 
 ```bash
-# Install Python dependencies
-pip install pandas sqlalchemy oracledb osmnx networkx
+pip install pandas sqlalchemy oracledb
 ```
 
-### Script 1: Seed Static Data (`01_seed_static.py`)
+> We currently use **only**:
 
-Populates master data with realistic Moroccan context:
+* `01_seed_static.py`
+* `04_live_iot_simulator.py`
+
+### Script 1: Seed Static Data (`01_seed_static.py`)
 
 ```bash
 cd src/generator
 python 01_seed_static.py
 ```
 
-**Seeds**:
-- ✅ **5 branches** (Casablanca HQ, Rabat Agdal, Marrakech Gueliz, Tangier Downtown, Agadir Plage)
-- ✅ **11 managers** (1 Supervisor + 2 managers per branch)
-- ✅ **50 IoT devices** (inactive until assigned to cars)
-- ✅ **5 car categories** (Economy, SUV, Luxury, Van, Electric)
-- ✅ **55 cars** with IoT device assignment → devices marked `ACTIVE`
-- ✅ **50 customers**
+Seeds:
 
-**Run time**: ~10-15 seconds
+* Branches, Managers, Categories, Devices, Cars, Customers
 
-### Script 2: Generate IoT Telemetry (`02_generate_iot_telemetry.py`)
+### Script 2: Live IoT Simulation (`04_live_iot_simulator.py`)
 
-Simulates 1 month of vehicle trips with realistic patterns:
+This script simulates “live telemetry” by pushing rows into `RT_IOT_FEED` (and optionally telemetry history depending on script behavior).
 
 ```bash
-python 02_generate_iot_telemetry.py
+python 04_live_iot_simulator.py
 ```
 
-**Features**:
-- **Time anchor**: Starts from `NOW + 5 minutes` (allows immediate streaming)
-- **31 days forward** (~1 month)
-- **Multi-day rentals**: 1, 2, 3, 5, 7, 10, 14-day durations
-- **Trip distribution**: 40% no trips, 45% one trip, 15% two trips per day
-- **Time windows**:
-  - Hard window: 07:00–21:00 (no driving outside)
-  - Soft forbidden (70% days): 04:00–08:00, 14:00–16:00 (early morning/lunch)
-- **OSM routing**: Real road networks for each city
-- **Physics simulation**: Speed, acceleration, fuel consumption, engine temp
-- **15% fleet idle**: Some cars never rented (maintenance/parking)
-
-**Output**: ~500K–1M rows in `IOT_TELEMETRY`
-
-**Run time**: ~5-10 minutes (depends on CPU; OSM graph loading is cached)
-
-### Script 3: Stream Live Data (`03_stream_iot_data.py`)
-
-Replays historical telemetry into `RT_IOT_FEED` for real-time monitoring:
-
-```bash
-python 03_stream_iot_data.py
-```
-
-**Behavior**:
-- **Replay window**: 30-second ticks (configurable)
-- **Speedup**: `SPEEDUP=1.0` (real-time), `SPEEDUP=2.0` (2x faster)
-- **Rental sync**: Auto-creates/closes rentals in `RENTALS` table
-- **Unique rental IDs**: `(CAR_ID × 1000) + sim_rental_id` to avoid collisions
-- **Loop**: When reaching end of telemetry, restarts from beginning
-
-**Run in background**:
-```bash
-nohup python 03_stream_iot_data.py > stream.log 2>&1 &
-```
+> Use this for the Live Monitor page.
 
 ---
 
@@ -269,49 +252,26 @@ nohup python 03_stream_iot_data.py > stream.log 2>&1 &
 
 ```
 car-rental-bi-platform/
-├── docker-compose.yml          # Orchestration (Oracle, API, Frontend)
-├── .env                        # Environment variables
+├── docker-compose.yml
+├── .env
 ├── src/
-│   ├── api/                    # Node.js REST API
-│   │   ├── src/
-│   │   │   ├── index.js        # Express app entry
-│   │   │   ├── db.js           # Oracle connection pool
-│   │   │   ├── authMiddleware.js
-│   │   │   └── routes/         # API endpoints
-│   │   │       ├── auth.js     # POST /api/auth/login
-│   │   │       ├── branches.js # CRUD branches
-│   │   │       ├── cars.js     # CRUD cars
-│   │   │       ├── managers.js # CRUD managers
-│   │   │       ├── rentals.js  # CRUD rentals
-│   │   │       ├── devices.js  # CRUD IoT devices
-│   │   │       ├── iotTelemetry.js  # GET telemetry
-│   │   │       └── iotAlerts.js     # GET alerts
-│   │   └── package.json
-│   ├── frontend/               # React SPA
-│   │   ├── src/
-│   │   │   ├── pages/
-│   │   │   │   ├── Login.tsx
-│   │   │   │   ├── Dashboard.tsx
-│   │   │   │   ├── LiveMonitor.tsx   # RT_IOT_FEED polling
-│   │   │   │   ├── Cars.tsx
-│   │   │   │   ├── Rentals.tsx
-│   │   │   │   └── ...
-│   │   │   ├── components/     # Reusable UI (Sidebar, Topbar, Cards)
-│   │   │   └── auth/           # AuthContext, ProtectedRoute
-│   │   └── package.json
+│   ├── api/
+│   ├── frontend/
 │   ├── database/
 │   │   ├── schema/
-│   │   │   ├── bronze.sql      # RAW_LAYER tables
-│   │   │   ├── silver.sql      # (Future) SILVER_LAYER
-│   │   │   └── gold.sql        # (Future) GOLD_LAYER
+│   │   │   ├── bronze.sql        # (kept, but not used in synthetic mode)
+│   │   │   ├── silver.sql        # SILVER operational schema (CURRENT)
+│   │   │   ├── gold.sql          # GOLD full deployment (CURRENT)
+│   │   │   └── gold/             # modular gold scripts (0..6 + run_all)
 │   │   ├── scripts/
-│   │   │   └── oracle_medallion_setup.sql  # User/tablespace provisioning
-│   │   └── connexion/          # Python DB helpers
-│   └── generator/              # Data generation scripts
+│   │   │   └── oracle_medallion_setup.sql
+│   │   └── connexion/
+│   └── generator/
 │       ├── 01_seed_static.py
-│       ├── 02_generate_iot_telemetry.py
-│       ├── 03_stream_iot_data.py
-│       └── cache/              # OSM graph cache (auto-generated)
+│       ├── 02_generate_iot_telemetry.py   # (not used currently)
+│       ├── 03_stream_iot_data.py          # (not used currently)
+│       ├── 04_live_iot_simulator.py       # CURRENT
+│       └── seed_data.json
 └── README.md
 ```
 
@@ -321,174 +281,81 @@ car-rental-bi-platform/
 
 Base URL: `http://localhost:5001/api`
 
+> **Important (Today’s change):** API should read from **SILVER_LAYER** (not RAW_LAYER).
+> Next step is to update routes/queries accordingly.
+
 ### Authentication
 
 #### POST `/auth/login`
+
 ```json
 {
-  "email": "hamza.supervisor@carrental.local",
+  "email": "hamzabjibji@gmail.com",
   "password": "Admin#123"
 }
 ```
-
-**Response**:
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "managerId": 1,
-    "email": "hamza.supervisor@carrental.local",
-    "role": "SUPERVISOR",
-    "branchId": null,
-    "firstName": "Hamza",
-    "lastName": "Bjibji"
-  }
-}
-```
-
-### Endpoints (Protected)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/branches` | List all branches |
-| GET | `/cars` | List cars (filtered by branch for managers) |
-| POST | `/cars` | Create new car |
-| PUT | `/cars/:id` | Update car |
-| GET | `/rentals` | List rentals |
-| POST | `/rentals` | Create rental |
-| GET | `/managers` | List managers (supervisor only) |
-| GET | `/devices` | List IoT devices |
-| GET | `/iot-telemetry` | Query telemetry (filters: carId, startDate, endDate) |
-| GET | `/iot-alerts` | List alerts |
-
-**Auth Header**: `Authorization: Bearer <token>`
 
 ---
 
 ## 💻 Technologies
 
 ### Backend
-- **Node.js 20** (Bullseye base)
-- **Express.js** - REST API framework
-- **oracledb** - Native Oracle client
-- **jsonwebtoken** - JWT authentication
-- **bcryptjs** - Password hashing
+
+* Node.js 20
+* Express.js
+* oracledb
+* jsonwebtoken
+* bcryptjs
 
 ### Frontend
-- **React 18** + **TypeScript**
-- **Vite** - Build tool
-- **Tailwind CSS** - Utility-first styling
-- **Recharts** - Data visualization
-- **Lucide React** - Icon library
+
+* React 18 + TypeScript
+* Vite
+* Tailwind CSS
+* Recharts
 
 ### Database
-- **Oracle 21c Express Edition**
-- **Medallion Architecture** (Bronze/Silver/Gold)
-- **Identity columns** (auto-increment PKs)
-- **Partitioning-ready** (for future scale)
+
+* Oracle 21c XE
+* Medallion Architecture
+* Identity columns
 
 ### DevOps
-- **Docker Compose** - Multi-container orchestration
-- **Python 3.11** - Data generation + ETL
-- **OSMnx** - OpenStreetMap routing
+
+* Docker Compose
+* Python 3.11
 
 ---
 
-## 🎓 Default Credentials
+## 📈 Roadmap
 
-### Supervisor (Global Access)
-- **Email**: `hamza.supervisor@carrental.local`
-- **Password**: `Admin#123`
-
-### Branch Managers (Examples)
-- **Casablanca**: `amina.berrada@carrental.ma` / `pwd#Casa1`
-- **Rabat**: `yassin.elidrissi@carrental.ma` / `pwd#Rabat1`
-- **Marrakech**: `nadia.zerouali@carrental.ma` / `pwd#Mrk1`
-
-*(See `01_seed_static.py` for full list)*
-
----
-
-## 🛠️ Development
-
-### Run API Locally (Without Docker)
-
-```bash
-cd src/api
-npm install
-node src/index.js
-```
-
-Ensure Oracle is running in Docker and accessible at `localhost:1521`.
-
-### Run Frontend Locally
-
-```bash
-cd src/frontend
-npm install
-npm run dev
-```
-
-Access at `http://localhost:5173`
-
-### Database Access
-
-```bash
-# SQL*Plus
-docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
-  "sqlplus raw_layer/Raw#123@localhost:1521/XEPDB1"
-
-# SQL Developer / DBeaver
-Host: localhost
-Port: 1521
-Service: XEPDB1
-User: raw_layer
-Password: Raw#123
-```
-
----
-
-## 📈 Future Enhancements
-
-- [ ] **Silver Layer**: Implement cleaning/validation ETL jobs
-- [ ] **Gold Layer**: Build aggregated fact tables (rental_facts, telemetry_summary)
-- [ ] **Predictive Maintenance**: ML models on telemetry patterns
-- [ ] **Mobile App**: React Native for field managers
-- [ ] **Real IoT Integration**: MQTT broker for live device feeds
-- [ ] **Multi-tenancy**: Support multiple rental companies
+* [ ] Bronze ingestion (real data)
+* [ ] Silver ETL from Bronze (validation/dedup)
+* [ ] Expand Gold KPIs & dashboards
+* [ ] Predictive maintenance models
+* [ ] MQTT / real IoT integration
 
 ---
 
 ## 🤝 Contributing
 
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/YourFeature`)
-3. Commit changes (`git commit -m 'Add YourFeature'`)
-4. Push to branch (`git push origin feature/YourFeature`)
-5. Open Pull Request
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License.
+1. Fork
+2. Feature branch
+3. Commit
+4. Push
+5. PR
 
 ---
 
 ## 👤 Author
 
-**Hamza Bjibji**  
-- GitHub: [@Bjibjihamza](https://github.com/Bjibjihamza)
-- Email: hamza.supervisor@carrental.local
+**Hamza Bjibji**
 
----
-
-## 🙏 Acknowledgments
-
-- Oracle Database XE for free edition
-- OpenStreetMap contributors for routing data
-- Moroccan car rental industry for domain inspiration
+* GitHub: `@Bjibjihamza`
+* Email: `hamzabjibji@gmail.com`
 
 ---
 
 **Happy Fleet Managing! 🚗💨**
+
+---
