@@ -1,15 +1,15 @@
-// ✅ src/api/src/routes/devices.js
+// src/api/src/routes/devices.js
+// ✅ FULL FILE — compatible with SILVER_LAYER.IOT_DEVICES, scoped by role/branch
+
 const express = require("express");
+const router = express.Router();
 const oracledb = require("oracledb");
 const { getConnection } = require("../db");
 const { authMiddleware } = require("../authMiddleware");
 const { isSupervisor, requireBranch } = require("../access");
 
-const router = express.Router();
-
 /* ===============================
    LIST DEVICES (Supervisor: all | Manager: own branch)
-   (keeps your extra fields: assignment + branch name/city + installed)
 ================================ */
 router.get("/", authMiddleware, async (req, res) => {
   const sup = isSupervisor(req);
@@ -33,6 +33,7 @@ router.get("/", authMiddleware, async (req, res) => {
         d.DEVICE_IMEI,
         d.FIRMWARE_VERSION,
         d.STATUS,
+        d.BRANCH_ID,
         d.ACTIVATED_AT,
         d.LAST_SEEN_AT,
         d.CREATED_AT,
@@ -53,20 +54,22 @@ router.get("/", authMiddleware, async (req, res) => {
       ORDER BY d.DEVICE_ID DESC
     `;
 
-    const r = await conn.execute(sql, binds);
+    const r = await conn.execute(sql, binds, { outFormat: oracledb.OUT_FORMAT_OBJECT });
     return res.json(r.rows || []);
   } catch (e) {
     console.error("DEVICES_GET_ERROR:", e);
-    return res.status(500).json({ message: e.message });
+    return res.status(500).json({ message: e.message || "Failed to fetch devices" });
   } finally {
-    try { if (conn) await conn.close(); } catch {}
+    try {
+      if (conn) await conn.close();
+    } catch {}
   }
 });
 
 /* ===============================
    CREATE DEVICE
    - Supervisor: can set any BRANCH_ID (or null)
-   - Manager: forced to his branch (cannot create for another)
+   - Manager: forced to his branch
 ================================ */
 router.post("/", authMiddleware, async (req, res) => {
   const sup = isSupervisor(req);
@@ -74,16 +77,16 @@ router.post("/", authMiddleware, async (req, res) => {
 
   const { DEVICE_CODE, DEVICE_IMEI, FIRMWARE_VERSION, STATUS, BRANCH_ID } = req.body || {};
 
-  if (!DEVICE_CODE) return res.status(400).json({ message: "DEVICE_CODE is required" });
+  if (!String(DEVICE_CODE || "").trim()) {
+    return res.status(400).json({ message: "DEVICE_CODE is required" });
+  }
 
   const status = String(STATUS || "INACTIVE").toUpperCase();
   if (!["ACTIVE", "INACTIVE", "RETIRED"].includes(status)) {
     return res.status(400).json({ message: "Invalid STATUS" });
   }
 
-  const branchIdToUse = sup
-    ? (BRANCH_ID ? Number(BRANCH_ID) : null)
-    : Number(userBranchId);
+  const branchIdToUse = sup ? (BRANCH_ID ? Number(BRANCH_ID) : null) : Number(userBranchId);
 
   let conn;
   try {
@@ -109,22 +112,25 @@ router.post("/", authMiddleware, async (req, res) => {
     };
 
     const r = await conn.execute(sql, binds, { autoCommit: true });
-    return res.json({ DEVICE_ID: r.outBinds.id[0], message: "Device created" });
+    return res.status(201).json({ DEVICE_ID: r.outBinds.id[0], message: "Device created" });
   } catch (e) {
     console.error("DEVICES_POST_ERROR:", e);
     if (String(e.message || "").includes("ORA-00001")) {
       return res.status(409).json({ message: "Device code or IMEI already exists" });
     }
-    return res.status(500).json({ message: e.message });
+    return res.status(500).json({ message: e.message || "Failed to create device" });
   } finally {
-    try { if (conn) await conn.close(); } catch {}
+    try {
+      if (conn) await conn.close();
+    } catch {}
   }
 });
 
-
-// GET /api/v1/devices/available
-// Supervisor: all unassigned devices (optionally filter by branchId)
-// Manager: only unassigned devices in his branch
+/* ===============================
+   GET /api/v1/devices/available
+   - Supervisor: all unassigned devices (optional branchId)
+   - Manager: only unassigned devices in his branch
+================================ */
 router.get("/available", authMiddleware, async (req, res) => {
   const sup = isSupervisor(req);
   const userBranchId = sup ? null : requireBranch(req);
@@ -139,7 +145,6 @@ router.get("/available", authMiddleware, async (req, res) => {
         AND NOT EXISTS (SELECT 1 FROM CARS c WHERE c.DEVICE_ID = d.DEVICE_ID)
     `;
 
-    // manager forced branch
     if (!sup) {
       where += ` AND NVL(d.BRANCH_ID, -1) = :bid`;
       binds.bid = Number(userBranchId);
@@ -155,16 +160,17 @@ router.get("/available", authMiddleware, async (req, res) => {
       ORDER BY d.DEVICE_CODE
     `;
 
-    const r = await conn.execute(sql, binds);
-    res.json(r.rows || []);
+    const r = await conn.execute(sql, binds, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+    return res.json(r.rows || []);
   } catch (e) {
     console.error("DEVICES_AVAILABLE_ERROR:", e);
-    res.status(500).json({ message: e.message });
+    return res.status(500).json({ message: e.message || "Failed to fetch available devices" });
   } finally {
-    try { if (conn) await conn.close(); } catch {}
+    try {
+      if (conn) await conn.close();
+    } catch {}
   }
 });
-
 
 /* ===============================
    UPDATE DEVICE
@@ -176,26 +182,30 @@ router.put("/:id", authMiddleware, async (req, res) => {
   const userBranchId = sup ? null : requireBranch(req);
 
   const deviceId = Number(req.params.id);
+  if (!deviceId) return res.status(400).json({ message: "Invalid device id" });
+
   const { DEVICE_CODE, DEVICE_IMEI, FIRMWARE_VERSION, STATUS, BRANCH_ID } = req.body || {};
+
+  if (!String(DEVICE_CODE || "").trim()) {
+    return res.status(400).json({ message: "DEVICE_CODE is required" });
+  }
 
   const status = String(STATUS || "INACTIVE").toUpperCase();
   if (!["ACTIVE", "INACTIVE", "RETIRED"].includes(status)) {
     return res.status(400).json({ message: "Invalid STATUS" });
   }
 
-  const branchIdToUse = sup
-    ? (BRANCH_ID ? Number(BRANCH_ID) : null)
-    : Number(userBranchId);
+  const branchIdToUse = sup ? (BRANCH_ID ? Number(BRANCH_ID) : null) : Number(userBranchId);
 
   let conn;
   try {
     conn = await getConnection();
 
-    // Manager can only edit devices in his branch
     if (!sup) {
       const chk = await conn.execute(
         `SELECT 1 FROM IOT_DEVICES WHERE DEVICE_ID = :id AND NVL(BRANCH_ID, -1) = :branchId`,
-        { id: deviceId, branchId: Number(userBranchId) }
+        { id: deviceId, branchId: Number(userBranchId) },
+        { outFormat: oracledb.OUT_FORMAT_OBJECT }
       );
       if ((chk.rows || []).length === 0) {
         return res.status(403).json({ message: "Forbidden: not in your branch" });
@@ -214,7 +224,7 @@ router.put("/:id", authMiddleware, async (req, res) => {
 
     const binds = {
       id: deviceId,
-      code: String(DEVICE_CODE || "").trim(),
+      code: String(DEVICE_CODE).trim(),
       imei: DEVICE_IMEI ? String(DEVICE_IMEI).trim() : null,
       fw: FIRMWARE_VERSION ? String(FIRMWARE_VERSION).trim() : null,
       status,
@@ -222,7 +232,7 @@ router.put("/:id", authMiddleware, async (req, res) => {
     };
 
     const r = await conn.execute(sql, binds, { autoCommit: true });
-    if (r.rowsAffected === 0) return res.status(404).json({ message: "Device not found" });
+    if ((r.rowsAffected || 0) === 0) return res.status(404).json({ message: "Device not found" });
 
     return res.json({ message: "Device updated" });
   } catch (e) {
@@ -230,9 +240,11 @@ router.put("/:id", authMiddleware, async (req, res) => {
     if (String(e.message || "").includes("ORA-00001")) {
       return res.status(409).json({ message: "Device code or IMEI already exists" });
     }
-    return res.status(500).json({ message: e.message });
+    return res.status(500).json({ message: e.message || "Failed to update device" });
   } finally {
-    try { if (conn) await conn.close(); } catch {}
+    try {
+      if (conn) await conn.close();
+    } catch {}
   }
 });
 
@@ -243,13 +255,16 @@ router.delete("/:id", authMiddleware, async (req, res) => {
   if (!isSupervisor(req)) return res.status(403).json({ message: "Supervisor only" });
 
   const deviceId = Number(req.params.id);
+  if (!deviceId) return res.status(400).json({ message: "Invalid device id" });
+
   let conn;
   try {
     conn = await getConnection();
 
     const chk = await conn.execute(
       `SELECT 1 FROM CARS WHERE DEVICE_ID = :id`,
-      { id: deviceId }
+      { id: deviceId },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
     if ((chk.rows || []).length > 0) {
       return res.status(400).json({ message: "Cannot delete: device is assigned to a car" });
@@ -261,13 +276,15 @@ router.delete("/:id", authMiddleware, async (req, res) => {
       { autoCommit: true }
     );
 
-    if (r.rowsAffected === 0) return res.status(404).json({ message: "Device not found" });
+    if ((r.rowsAffected || 0) === 0) return res.status(404).json({ message: "Device not found" });
     return res.json({ message: "Device deleted" });
   } catch (e) {
     console.error("DEVICES_DELETE_ERROR:", e);
-    return res.status(500).json({ message: e.message });
+    return res.status(500).json({ message: e.message || "Failed to delete device" });
   } finally {
-    try { if (conn) await conn.close(); } catch {}
+    try {
+      if (conn) await conn.close();
+    } catch {}
   }
 });
 

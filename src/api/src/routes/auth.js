@@ -1,4 +1,4 @@
-// ✅ FIX: src/api/src/routes/auth.js  (bcrypt login + keeps your /me + profile update + password change)
+// src/api/src/routes/auth.js
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
@@ -18,7 +18,7 @@ function normalizeRole(dbRole) {
 }
 
 // ===============================
-// LOGIN (bcrypt ONLY)
+// LOGIN (bcrypt ONLY) - SILVER
 // ===============================
 router.post("/login", async (req, res) => {
   const { email, password } = req.body ?? {};
@@ -53,10 +53,7 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    const get = (key, idx) =>
-      row && typeof row === "object" && !Array.isArray(row) ? row[key] : row[idx];
-
-    const storedHash = String(get("MANAGER_PASSWORD", 6) || "").trim();
+    const storedHash = String(row.MANAGER_PASSWORD || "").trim();
 
     // 🔐 bcrypt ONLY
     const ok = await bcrypt.compare(String(password), storedHash);
@@ -65,14 +62,14 @@ router.post("/login", async (req, res) => {
     }
 
     const payload = {
-      managerId: get("MANAGER_ID", 0),
-      managerCode: get("MANAGER_CODE", 1),
-      firstName: get("FIRST_NAME", 2),
-      lastName: get("LAST_NAME", 3),
-      email: get("EMAIL", 4),
-      phone: get("PHONE", 5) ?? null,
-      branchId: get("BRANCH_ID", 7) ?? null,
-      role: normalizeRole(get("ROLE", 8)),
+      managerId: row.MANAGER_ID,
+      managerCode: row.MANAGER_CODE,
+      firstName: row.FIRST_NAME,
+      lastName: row.LAST_NAME,
+      email: row.EMAIL,
+      phone: row.PHONE ?? null,
+      branchId: row.BRANCH_ID ?? null,
+      role: normalizeRole(row.ROLE),
     };
 
     const token = signUser(payload);
@@ -85,7 +82,6 @@ router.post("/login", async (req, res) => {
     try { if (conn) await conn.close(); } catch {}
   }
 });
-
 
 /* ===============================
    GET CURRENT USER (ME)
@@ -158,18 +154,15 @@ router.put("/me", authMiddleware, async (req, res) => {
     const row = r.rows?.[0];
     if (!row) return res.status(404).json({ message: "User not found" });
 
-    const get = (key, idx) =>
-      row && typeof row === "object" && !Array.isArray(row) ? row[key] : row[idx];
-
     const payload = {
-      managerId: get("MANAGER_ID", 0),
-      managerCode: get("MANAGER_CODE", 1),
-      firstName: get("FIRST_NAME", 2),
-      lastName: get("LAST_NAME", 3),
-      email: get("EMAIL", 4),
-      phone: get("PHONE", 5) ?? null,
-      branchId: get("BRANCH_ID", 6) ?? null,
-      role: normalizeRole(get("ROLE", 7)),
+      managerId: row.MANAGER_ID,
+      managerCode: row.MANAGER_CODE,
+      firstName: row.FIRST_NAME,
+      lastName: row.LAST_NAME,
+      email: row.EMAIL,
+      phone: row.PHONE ?? null,
+      branchId: row.BRANCH_ID ?? null,
+      role: normalizeRole(row.ROLE),
     };
 
     const token = signUser(payload);
@@ -238,6 +231,5 @@ router.put("/me/password", authMiddleware, async (req, res) => {
     try { if (conn) await conn.close(); } catch {}
   }
 });
-
 
 module.exports = router;

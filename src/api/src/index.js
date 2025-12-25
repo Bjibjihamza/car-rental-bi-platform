@@ -1,4 +1,4 @@
-// ✅ src/api/src/index.js  (mount devices route if not already)
+// src/api/src/index.js
 const express = require("express");
 const cors = require("cors");
 const { initPool } = require("./db");
@@ -13,6 +13,7 @@ const managersRouter = require("./routes/managers");
 const iotAlertsRouter = require("./routes/iotAlerts");
 const iotTelemetryRouter = require("./routes/iotTelemetry");
 const categoriesRouter = require("./routes/categories");
+const analyticsRouter = require("./routes/analytics"); // ✅ ADD THIS
 
 const app = express();
 app.use(express.json());
@@ -36,6 +37,7 @@ app.use("/api/v1/managers", managersRouter);
 app.use("/api/v1/iot-alerts", iotAlertsRouter);
 app.use("/api/v1/iot-telemetry", iotTelemetryRouter);
 app.use("/api/v1/categories", categoriesRouter);
+app.use("/api/v1/analytics", analyticsRouter); // ✅ ADD THIS
 
 const PORT = process.env.PORT || 8000;
 

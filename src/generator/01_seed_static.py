@@ -11,8 +11,8 @@ from sqlalchemy import create_engine, text
 
 ORACLE_URL = "oracle+oracledb://"
 CONNECT_ARGS = {
-    "user": "raw_layer",
-    "password": "Raw#123",
+    "user": "silver_layer",
+    "password": "Silver#123",
     "dsn": "localhost:1521/XEPDB1",
 }
 

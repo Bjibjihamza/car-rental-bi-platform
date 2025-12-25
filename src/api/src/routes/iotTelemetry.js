@@ -1,3 +1,6 @@
+// src/api/src/routes/iotTelemetry.js
+// ✅ FULL FILE — SILVER compatible (RT_IOT_FEED + CARS join + branch scoping)
+
 const express = require("express");
 const router = express.Router();
 const oracledb = require("oracledb");
@@ -10,7 +13,6 @@ const { isSupervisor, requireBranch } = require("../access");
  * - Reads from RT_IOT_FEED (live buffer)
  * - Joins CARS to expose MAKE/MODEL/PLATE
  * - SCOPED: Managers only see their branch
- * - Returns OBJECT rows (OUT_FORMAT_OBJECT) ✅
  */
 router.get("/live", authMiddleware, async (req, res) => {
   let conn;
@@ -36,24 +38,22 @@ router.get("/live", authMiddleware, async (req, res) => {
     `;
 
     const binds = {};
-
     if (!isSupervisor(req)) {
       sql += ` WHERE c.BRANCH_ID = :branchId`;
-      binds.branchId = requireBranch(req);
+      binds.branchId = Number(requireBranch(req));
     }
 
     sql += ` ORDER BY rt.RECEIVED_AT DESC FETCH FIRST 150 ROWS ONLY`;
 
-    const result = await conn.execute(sql, binds, {
-      outFormat: oracledb.OUT_FORMAT_OBJECT,
-    });
-
-    res.json(result.rows || []);
+    const result = await conn.execute(sql, binds, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+    return res.json(result.rows || []);
   } catch (e) {
-    console.error("Live Feed Error:", e);
-    res.status(500).json({ message: e.message || "Failed to fetch live feed" });
+    console.error("IOT_TELEMETRY_LIVE_ERROR:", e);
+    return res.status(500).json({ message: e.message || "Failed to fetch live feed" });
   } finally {
-    try { if (conn) await conn.close(); } catch {}
+    try {
+      if (conn) await conn.close();
+    } catch {}
   }
 });
 

@@ -1,16 +1,13 @@
 // src/api/src/routes/rentals.js
+// ✅ FULL FILE — SILVER compatible, uses RENTALS + RT_IOT_FEED + IOT_TELEMETRY
+// ✅ Includes /:id/report, GET list (CURRENT ONLY), POST create
 
 const express = require("express");
 const router = express.Router();
 const oracledb = require("oracledb");
 const { getConnection } = require("../db");
 const { authMiddleware } = require("../authMiddleware");
-const {
-  isSupervisor,
-  requireManager,
-  requireManagerId,
-  requireBranch,
-} = require("../access");
+const { isSupervisor, requireManager, requireManagerId, requireBranch } = require("../access");
 
 function requireBody(res, body, fields) {
   for (const f of fields) {
@@ -31,11 +28,7 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   const dLon = toRad(lon2 - lon1);
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
@@ -44,12 +37,6 @@ function safeNum(v) {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
-}
-
-function pickRow(row, key, idx) {
-  if (!row) return null;
-  if (typeof row === "object" && !Array.isArray(row)) return row[key];
-  return row[idx];
 }
 
 function downsample(points, maxPoints) {
@@ -136,9 +123,7 @@ function buildReport(telemetry, options = {}) {
         event: ev,
       });
 
-      if (prevGps) {
-        gpsDistanceKm += haversineKm(prevGps.lat, prevGps.lng, lat, lng);
-      }
+      if (prevGps) gpsDistanceKm += haversineKm(prevGps.lat, prevGps.lng, lat, lng);
       prevGps = { lat, lng };
     }
   }
@@ -168,7 +153,10 @@ function buildReport(telemetry, options = {}) {
     routePoints,
   };
 }
-// ✅ FULL ROUTE: GET /api/v1/rentals/:id/report
+
+/* ===============================
+   GET /api/v1/rentals/:id/report
+================================ */
 router.get("/:id/report", authMiddleware, async (req, res) => {
   const rentalId = Number(req.params.id);
   const sample = Math.min(Math.max(Number(req.query.sample || 80), 10), 300);
@@ -179,7 +167,7 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
 
     const binds = { id: rentalId };
 
-    // 1) Load rental + car info
+    // 1) rental + car
     let rentalSql = `
       SELECT
         r.RENTAL_ID,
@@ -197,30 +185,18 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
 
     if (!isSupervisor(req)) {
       rentalSql += ` AND r.BRANCH_ID = :branchId`;
-      binds.branchId = requireBranch(req);
+      binds.branchId = Number(requireBranch(req));
     }
 
-    const rentalR = await conn.execute(rentalSql, binds, {
-      outFormat: oracledb.OUT_FORMAT_OBJECT,
-    });
-
+    const rentalR = await conn.execute(rentalSql, binds, { outFormat: oracledb.OUT_FORMAT_OBJECT });
     const row = rentalR.rows?.[0];
     if (!row) return res.status(404).json({ message: "Rental not found" });
 
-    const RENTAL_ID = Number(row.RENTAL_ID);
-    const CAR_ID = Number(row.CAR_ID);
-    const BRANCH_ID = Number(row.BRANCH_ID);
-    const START_AT = row.START_AT;
-    const END_AT = row.END_AT;
-    const LICENSE_PLATE = row.LICENSE_PLATE;
-    const MAKE = row.MAKE;
-    const MODEL = row.MODEL;
-
-    // 2) Telemetry for THIS rental only (strict)
-    // ✅ Primary: RT_IOT_FEED tagged with real RENTAL_ID (from streamer)
+    // 2) telemetry: prefer RT_IOT_FEED by RENTAL_ID, fallback to IOT_TELEMETRY by window
     let telemetry = [];
 
-    const rtSql = `
+    const rtR = await conn.execute(
+      `
       SELECT
         rt.RECEIVED_AT,
         rt.DEVICE_ID,
@@ -237,20 +213,16 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
       FROM RT_IOT_FEED rt
       WHERE rt.RENTAL_ID = :rid
       ORDER BY rt.RECEIVED_AT ASC
-    `;
-
-    const rtR = await conn.execute(
-      rtSql,
-      { rid: RENTAL_ID },
+      `,
+      { rid: Number(row.RENTAL_ID) },
       { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
 
     telemetry = rtR.rows || [];
 
-    // ✅ Fallback: if streamer didn't tag RT_IOT_FEED.RENTAL_ID yet
-    // Use historical IOT_TELEMETRY within rental window (CAR_ID + time range)
     if (!telemetry.length) {
-      const histSql = `
+      const histR = await conn.execute(
+        `
         SELECT
           EVENT_TS AS RECEIVED_AT,
           DEVICE_ID,
@@ -269,47 +241,38 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
           AND EVENT_TS >= :startAt
           AND EVENT_TS <= :endAt
         ORDER BY EVENT_TS ASC
-      `;
-
-      const histR = await conn.execute(
-        histSql,
-        { carId: CAR_ID, startAt: START_AT, endAt: END_AT },
+        `,
+        {
+          carId: Number(row.CAR_ID),
+          startAt: row.START_AT,
+          endAt: row.END_AT,
+        },
         { outFormat: oracledb.OUT_FORMAT_OBJECT }
       );
-
       telemetry = histR.rows || [];
     }
 
-    // 3) Build report metrics + route (your existing logic)
-    const { metrics, routePoints } = buildReport(telemetry, {
-      SPEEDING_KMH: 120,
-      HARSH_BRAKE_BAR: 65,
-      HARSH_ACCEL_MS2: 3.5,
-      OVERHEAT_C: 110,
-    });
-
+    const { metrics, routePoints } = buildReport(telemetry);
     const route = downsample(routePoints, sample);
 
-    // 4) Response (shape expected by RentalReportPage)
-    res.json({
+    return res.json({
       rental: {
-        RENTAL_ID,
-        CAR_ID,
-        BRANCH_ID,
-        LICENSE_PLATE,
-        MAKE,
-        MODEL,
-        START_AT,
-        END_AT,
+        RENTAL_ID: Number(row.RENTAL_ID),
+        CAR_ID: Number(row.CAR_ID),
+        BRANCH_ID: Number(row.BRANCH_ID),
+        LICENSE_PLATE: row.LICENSE_PLATE,
+        MAKE: row.MAKE,
+        MODEL: row.MODEL,
+        START_AT: row.START_AT,
+        END_AT: row.END_AT,
         telemetryPoints: telemetry.length,
-        simRentalId: null, // ✅ no more sim id trick
       },
       metrics,
       route,
     });
   } catch (e) {
     console.error("RENTAL_REPORT_ERROR:", e);
-    res.status(500).json({ message: e.message || "Failed to build report" });
+    return res.status(500).json({ message: e.message || "Failed to build report" });
   } finally {
     try {
       if (conn) await conn.close();
@@ -317,14 +280,38 @@ router.get("/:id/report", authMiddleware, async (req, res) => {
   }
 });
 
-/* ================= ROUTES ================= */
-
+/* ===============================
+   GET /api/v1/rentals
+   ✅ CURRENT ONLY by default:
+   - start_at <= now
+   - end_at >= now (end_at = NVL(return_at, due_at))
+   - status in ACTIVE/IN_PROGRESS
+   To disable filter: ?all=1
+================================ */
 router.get("/", authMiddleware, async (req, res) => {
   let conn;
   try {
     conn = await getConnection();
 
     const binds = {};
+    const where = [];
+
+    // Branch restriction for manager
+    if (!isSupervisor(req)) {
+      where.push(`r.BRANCH_ID = :branchId`);
+      binds.branchId = Number(requireBranch(req));
+    }
+
+    // ✅ default: current only (hide next month rentals)
+    const all = String(req.query.all || "") === "1";
+    if (!all) {
+      where.push(`
+        r.STATUS IN ('ACTIVE','IN_PROGRESS','ACTIVE_SIM')
+        AND r.START_AT <= SYSTIMESTAMP
+        AND NVL(r.RETURN_AT, r.DUE_AT) >= SYSTIMESTAMP
+      `);
+    }
+
     let sql = `
       SELECT
         r.RENTAL_ID,
@@ -361,23 +348,14 @@ router.get("/", authMiddleware, async (req, res) => {
       JOIN CUSTOMERS cu ON cu.CUSTOMER_ID = r.CUSTOMER_ID
     `;
 
-    if (!isSupervisor(req)) {
-      sql += ` WHERE r.BRANCH_ID = :branchId`;
-      binds.branchId = requireBranch(req);
-    }
-
+    if (where.length) sql += ` WHERE ` + where.join(" AND ");
     sql += ` ORDER BY r.RENTAL_ID DESC`;
 
-    const r = await conn.execute(sql, binds, {
-      outFormat: oracledb.OUT_FORMAT_OBJECT,
-    });
-
-    res.json(r.rows || []);
+    const r = await conn.execute(sql, binds, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+    return res.json(r.rows || []);
   } catch (e) {
     console.error("RENTALS_GET_ERROR:", e);
-    res
-      .status(e.status || 500)
-      .json({ message: e.message || "Failed to fetch rentals" });
+    return res.status(e.status || 500).json({ message: e.message || "Failed to fetch rentals" });
   } finally {
     try {
       if (conn) await conn.close();
@@ -385,11 +363,11 @@ router.get("/", authMiddleware, async (req, res) => {
   }
 });
 
-/**
- * POST /api/v1/rentals
- * - only MANAGER can create
- * - uses manager branch + managerId from token
- */
+/* ===============================
+   POST /api/v1/rentals
+   - Manager only
+   - Use Oracle bind Date objects
+================================ */
 router.post("/", authMiddleware, async (req, res) => {
   const body = req.body || {};
   const ok = requireBody(res, body, ["CAR_ID", "CUSTOMER_ID", "START_AT", "DUE_AT"]);
@@ -401,8 +379,17 @@ router.post("/", authMiddleware, async (req, res) => {
 
     conn = await getConnection();
 
-    const branchId = requireBranch(req);
-    const managerId = requireManagerId(req);
+    const branchId = Number(requireBranch(req));
+    const managerId = Number(requireManagerId(req));
+
+    const startAt = new Date(String(body.START_AT));
+    const dueAt = new Date(String(body.DUE_AT));
+    if (Number.isNaN(startAt.getTime()) || Number.isNaN(dueAt.getTime())) {
+      return res.status(400).json({ message: "START_AT / DUE_AT must be valid ISO dates" });
+    }
+    if (startAt >= dueAt) {
+      return res.status(400).json({ message: "START_AT must be < DUE_AT" });
+    }
 
     const result = await conn.execute(
       `
@@ -415,9 +402,7 @@ router.post("/", authMiddleware, async (req, res) => {
       )
       VALUES (
         :carId, :customerId, :branchId, :managerId,
-        TO_TIMESTAMP(:startAt, 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"'),
-        TO_TIMESTAMP(:dueAt,   'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"'),
-        NULL,
+        :startAt, :dueAt, NULL,
         :status,
         :startOdo, NULL,
         :totalAmount, :currency
@@ -427,10 +412,10 @@ router.post("/", authMiddleware, async (req, res) => {
       {
         carId: Number(body.CAR_ID),
         customerId: Number(body.CUSTOMER_ID),
-        branchId: Number(branchId),
-        managerId: Number(managerId),
-        startAt: String(body.START_AT),
-        dueAt: String(body.DUE_AT),
+        branchId,
+        managerId,
+        startAt,
+        dueAt,
         status: String(body.STATUS || "ACTIVE").toUpperCase(),
         startOdo: body.START_ODOMETER != null ? Number(body.START_ODOMETER) : null,
         totalAmount: body.TOTAL_AMOUNT != null ? Number(body.TOTAL_AMOUNT) : null,
@@ -440,18 +425,17 @@ router.post("/", authMiddleware, async (req, res) => {
       { autoCommit: true }
     );
 
+    // optional safety (trigger also handles)
     await conn.execute(
-      `UPDATE CARS SET STATUS = 'RENTED' WHERE CAR_ID = :id`,
+      `UPDATE CARS SET STATUS='RENTED' WHERE CAR_ID=:id`,
       { id: Number(body.CAR_ID) },
       { autoCommit: true }
     );
 
-    res.status(201).json({ RENTAL_ID: result.outBinds.outId[0] });
+    return res.status(201).json({ RENTAL_ID: result.outBinds.outId[0] });
   } catch (e) {
     console.error("RENTALS_POST_ERROR:", e);
-    res
-      .status(e.status || 500)
-      .json({ message: e.message || "Failed to create rental" });
+    return res.status(e.status || 500).json({ message: e.message || "Failed to create rental" });
   } finally {
     try {
       if (conn) await conn.close();

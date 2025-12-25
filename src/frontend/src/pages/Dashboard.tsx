@@ -1,742 +1,536 @@
-// src/frontend/src/pages/Dashboard.tsx
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
+import { useState, useEffect, useMemo } from "react";
 import {
+  Activity,
+  Wallet,
+  Bell,
+  Car,
+  Wrench,
+  Gauge,
+  RefreshCw,
+  TrendingUp,
+  TrendingDown,
+  AlertTriangle,
+  Zap,
+  Users,
+  MapPin,
+  ArrowUpRight,
+  ArrowDownRight,
+  Circle,
+  BarChart3,
+  PieChart as PieChartIcon,
+  LineChart as LineChartIcon,
+} from "lucide-react";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
   AreaChart,
   Area,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
-  CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
+  CartesianGrid,
   PieChart,
   Pie,
   Cell,
-  Legend,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  Radar,
 } from "recharts";
-import {
-  LayoutDashboard,
-  TrendingUp,
-  TrendingDown,
-  DollarSign,
-  Car,
-  Activity,
-  AlertTriangle,
-  Clock,
-  MapPin,
-  Calendar,
-  ArrowRight,
-  MoreHorizontal,
-  RefreshCw,
-  Zap,
-  ShieldCheck,
-  Wrench,
-  Search,
-  Filter,
-  Download,
-  Bell, // ✅ Fixed: Imported Bell
-} from "lucide-react";
 
-/* ================= TYPES & INTERFACES ================= */
+const API_URL = "http://localhost:8000";
 
-type CarData = {
-  CAR_ID: number;
-  MAKE: string;
-  MODEL: string;
-  STATUS: string; // AVAILABLE, RENTED, MAINTENANCE, RETIRED
-  ODOMETER_KM: number;
-  BRANCH_ID: number;
-};
-
-type RentalData = {
-  RENTAL_ID: number;
-  START_AT: string;
-  DUE_AT: string;
-  RETURN_AT: string | null;
-  STATUS: string; // ACTIVE, CLOSED, OVERDUE, CANCELLED
-  TOTAL_AMOUNT: number | null;
-  CREATED_AT: string;
-};
-
-type AlertData = {
-  ALERT_ID: number;
-  SEVERITY: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  MESSAGE: string;
-  CREATED_AT: string;
-  IS_RESOLVED: number;
-};
-
-type BranchData = {
-  BRANCH_ID: number;
-  BRANCH_NAME: string;
-  CITY: string;
-};
-
-type DashboardStats = {
-  totalRevenue: number;
-  activeRentals: number;
-  totalFleet: number;
-  utilizationRate: number;
-  maintenanceCount: number;
-  criticalAlerts: number;
-  revenueGrowth: number;
-};
-
-type BranchPerformance = {
-  id: number;
-  name: string;
-  revenue: number;
-  activeRentals: number;
-  utilization: number;
-};
-
-/* ================= CONSTANTS & UTILS ================= */
-
-const API_URL = (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
-
-const COLORS = {
-  primary: "#6366f1",   // Indigo 500
-  grid: "#ffffff10",
-};
-
-const PIE_COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#ef4444", "#6366f1"];
-
-const formatMoney = (amount: number) =>
-  new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(amount);
-
-const formatNumber = (num: number) =>
-  new Intl.NumberFormat("en-US", { notation: "compact", compactDisplay: "short" }).format(num);
-
-/* ================= COMPONENT: STAT CARD ================= */
-
-function StatCard({
-  title,
-  value,
-  trend,
-  icon: Icon,
-  color,
-  prefix = "",
-  suffix = "",
-}: {
-  title: string;
-  value: string | number;
-  trend?: number;
-  icon: any;
-  color: "indigo" | "emerald" | "amber" | "rose";
-  prefix?: string;
-  suffix?: string;
-}) {
-  const colorStyles = {
-    indigo: "bg-indigo-500/10 text-indigo-400 border-indigo-500/20",
-    emerald: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    amber: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-    rose: "bg-rose-500/10 text-rose-400 border-rose-500/20",
+type DashboardOverview = {
+  today: {
+    rentals: number;
+    revenueMAD: number;
+    alertsOpen: number;
+    activeRentalsNow: number;
   };
+  fleet: {
+    total: number;
+    available: number;
+    rented: number;
+    maintenance: number;
+  };
+  source?: "GOLD" | "SILVER";
+};
+
+type DailyPoint = {
+  DATE_KEY: number;
+  FULL_DATE: string;
+  VALUE: number;
+};
+
+async function apiGet<T>(url: string): Promise<T> {
+  const token = localStorage.getItem("token");
+  const res = await fetch(url, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(txt || `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+const MetricCard = ({ icon: Icon, label, value, change, trend, color, subtitle, isLoading }) => {
+  const isPositive = trend === "up";
+  const TrendIcon = isPositive ? ArrowUpRight : ArrowDownRight;
 
   return (
-    <div className="group relative overflow-hidden rounded-2xl border border-white/5 bg-[#121212] p-6 transition-all hover:border-white/10 hover:bg-[#18181b]">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-sm font-medium text-neutral-400">{title}</p>
-          <h3 className="mt-2 text-3xl font-bold text-white tracking-tight">
-            {prefix}{value}{suffix}
-          </h3>
-        </div>
-        <div className={`rounded-xl border p-3 ${colorStyles[color]} transition-transform group-hover:scale-110`}>
-          <Icon size={24} strokeWidth={1.5} />
-        </div>
-      </div>
+    <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/5 to-white/[0.02] p-6 backdrop-blur-sm transition-all hover:border-white/20 hover:shadow-2xl hover:shadow-indigo-500/10">
+      <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-gradient-to-br from-indigo-500/20 to-purple-500/20 blur-3xl" />
       
-      {trend !== undefined && (
-        <div className="mt-4 flex items-center gap-2">
-          <div
-            className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
-              trend >= 0 ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
-            }`}
-          >
-            {trend >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-            {Math.abs(trend)}%
+      <div className="relative">
+        <div className="flex items-start justify-between">
+          <div className={`rounded-xl bg-gradient-to-br ${color} p-3 shadow-lg`}>
+            <Icon className="h-5 w-5 text-white" />
           </div>
-          <span className="text-xs text-neutral-500">vs last month</span>
+          
+          {change && !isLoading && (
+            <div className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ${
+              isPositive ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
+            }`}>
+              <TrendIcon className="h-3 w-3" />
+              {change}%
+            </div>
+          )}
         </div>
-      )}
-      
-      {/* Background decoration */}
-      <div className={`absolute -bottom-4 -right-4 h-24 w-24 rounded-full blur-3xl opacity-10 ${colorStyles[color].split(' ')[0].replace('/10', '')}`} />
+
+        <div className="mt-4">
+          <div className="text-sm font-medium text-neutral-400">{label}</div>
+          {isLoading ? (
+            <div className="mt-1 h-8 w-24 animate-pulse rounded bg-white/10" />
+          ) : (
+            <>
+              <div className="mt-1 text-3xl font-bold text-white">{value}</div>
+              {subtitle && <div className="mt-1 text-xs text-neutral-500">{subtitle}</div>}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
-}
+};
 
-/* ================= COMPONENT: ACTIVITY ITEM ================= */
+const GlowingCard = ({ title, subtitle, children, className = "", icon: Icon }) => {
+  return (
+    <div className={`relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-[#0a0a0a] to-[#121212] p-6 shadow-2xl ${className}`}>
+      <div className="absolute -left-20 -top-20 h-40 w-40 rounded-full bg-indigo-500/10 blur-3xl" />
+      <div className="absolute -bottom-20 -right-20 h-40 w-40 rounded-full bg-purple-500/10 blur-3xl" />
+      
+      <div className="relative">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              {Icon && <Icon className="h-5 w-5 text-indigo-400" />}
+              <h3 className="text-lg font-bold text-white">{title}</h3>
+            </div>
+            {subtitle && <p className="mt-1 text-xs text-neutral-500">{subtitle}</p>}
+          </div>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+};
 
-function ActivityItem({
-  icon: Icon,
-  title,
-  desc,
-  time,
-  tone = "neutral"
-}: {
-  icon: any;
-  title: string;
-  desc: string;
-  time: string;
-  tone?: "neutral" | "success" | "warning" | "danger" | "info";
-}) {
-  const tones = {
-    neutral: "bg-neutral-800 text-neutral-400",
-    success: "bg-emerald-500/20 text-emerald-400",
-    warning: "bg-amber-500/20 text-amber-400",
-    danger: "bg-rose-500/20 text-rose-400",
-    info: "bg-blue-500/20 text-blue-400",
+const StatBadge = ({ icon: Icon, label, value, color = "blue" }) => {
+  const colors = {
+    blue: "from-blue-500 to-cyan-500",
+    green: "from-emerald-500 to-teal-500",
+    amber: "from-amber-500 to-orange-500",
+    purple: "from-purple-500 to-pink-500",
+    red: "from-red-500 to-rose-500",
+    gray: "from-gray-500 to-slate-500",
   };
 
   return (
-    <div className="group flex gap-4 p-3 rounded-xl transition-colors hover:bg-white/5">
-      <div className={`mt-1 h-10 w-10 shrink-0 rounded-full grid place-items-center ${tones[tone]}`}>
-        <Icon size={18} />
+    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 backdrop-blur-sm">
+      <div className={`rounded-lg bg-gradient-to-br ${colors[color]} p-2`}>
+        <Icon className="h-4 w-4 text-white" />
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex justify-between items-start">
-          <p className="text-sm font-semibold text-white truncate pr-2">{title}</p>
-          <span className="text-xs text-neutral-500 whitespace-nowrap">{time}</span>
-        </div>
-        <p className="text-xs text-neutral-400 mt-0.5 line-clamp-1">{desc}</p>
+      <div>
+        <div className="text-xs text-neutral-400">{label}</div>
+        <div className="text-sm font-bold text-white">{value}</div>
       </div>
     </div>
   );
-}
-
-/* ================= MAIN PAGE COMPONENT ================= */
+};
 
 export function DashboardPage() {
-  const { token, user } = useAuth();
-  
   const [loading, setLoading] = useState(true);
-  const [timeRange, setTimeRange] = useState<"7d" | "30d" | "90d">("30d");
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [timeRange, setTimeRange] = useState<7 | 30 | 90>(30);
+  
+  const [overview, setOverview] = useState<DashboardOverview | null>(null);
+  const [rentalsData, setRentalsData] = useState<DailyPoint[]>([]);
+  const [alertsData, setAlertsData] = useState<DailyPoint[]>([]);
 
-  // Raw Data Storage
-  const [cars, setCars] = useState<CarData[]>([]);
-  const [rentals, setRentals] = useState<RentalData[]>([]);
-  const [alerts, setAlerts] = useState<AlertData[]>([]);
-  const [branches, setBranches] = useState<BranchData[]>([]);
+  const fetchData = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const [overviewRes, rentalsRes, alertsRes] = await Promise.all([
+        apiGet<DashboardOverview>(`${API_URL}/api/v1/analytics/dashboard/overview`),
+        apiGet<DailyPoint[]>(`${API_URL}/api/v1/analytics/kpi/rentals-daily?days=${timeRange}`),
+        apiGet<DailyPoint[]>(`${API_URL}/api/v1/analytics/kpi/alerts-daily?days=${timeRange}`),
+      ]);
 
-  // -- Data Fetching --
+      setOverview(overviewRes);
+      setRentalsData(Array.isArray(rentalsRes) ? rentalsRes : []);
+      setAlertsData(Array.isArray(alertsRes) ? alertsRes : []);
+    } catch (err: any) {
+      setError(err.message || "Failed to load dashboard data");
+      console.error("Dashboard fetch error:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    async function fetchAllData() {
-      setLoading(true);
-      const headers = { Accept: "application/json", Authorization: `Bearer ${token}` };
-      
-      try {
-        const [carsRes, rentalsRes, alertsRes, branchesRes] = await Promise.all([
-          fetch(`${API_URL}/api/v1/cars`, { headers }),
-          fetch(`${API_URL}/api/v1/rentals`, { headers }),
-          fetch(`${API_URL}/api/v1/iot-alerts`, { headers }), // ✅ Fixed Endpoint
-          fetch(`${API_URL}/api/v1/branches`, { headers }),
-        ]);
+    fetchData();
+  }, [timeRange]);
 
-        const [carsData, rentalsData, alertsData, branchesData] = await Promise.all([
-            carsRes.ok ? carsRes.json() : [],
-            rentalsRes.ok ? rentalsRes.json() : [],
-            alertsRes.ok ? alertsRes.json() : [],
-            branchesRes.ok ? branchesRes.json() : [],
-        ]);
-
-        setCars(Array.isArray(carsData) ? carsData : []);
-        setRentals(Array.isArray(rentalsData) ? rentalsData : []);
-        setAlerts(Array.isArray(alertsData) ? alertsData : []);
-        setBranches(Array.isArray(branchesData) ? branchesData : []);
-
-      } catch (error) {
-        console.error("Dashboard data load failed", error);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchAllData();
-  }, [token, refreshKey]);
-
-  // -- Aggregations --
-
-  // 1. Stats
-  const stats: DashboardStats = useMemo(() => {
-    const totalRevenue = rentals.reduce((acc, r) => acc + (r.TOTAL_AMOUNT || 0), 0);
-    const activeRentals = rentals.filter(r => r.STATUS === "ACTIVE").length;
-    const totalFleet = cars.length;
-    const rentedCars = cars.filter(c => c.STATUS === "RENTED").length;
-    const utilizationRate = totalFleet > 0 ? Math.round((rentedCars / totalFleet) * 100) : 0;
-    
-    // Growth calculation (Current Month vs Last Month)
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const lastMonth = currentMonth === 0 ? 11 : currentMonth - 1;
-    
-    let currentMonthRev = 0;
-    let lastMonthRev = 0;
-
-    rentals.forEach(r => {
-        const d = new Date(r.CREATED_AT);
-        if (d.getMonth() === currentMonth && d.getFullYear() === now.getFullYear()) {
-            currentMonthRev += (r.TOTAL_AMOUNT || 0);
-        } else if (d.getMonth() === lastMonth) {
-            lastMonthRev += (r.TOTAL_AMOUNT || 0);
-        }
-    });
-
-    const revenueGrowth = lastMonthRev > 0 
-        ? Math.round(((currentMonthRev - lastMonthRev) / lastMonthRev) * 100) 
-        : 100;
-
-    return {
-      totalRevenue,
-      activeRentals,
-      totalFleet,
-      utilizationRate,
-      maintenanceCount: cars.filter(c => c.STATUS === "MAINTENANCE").length,
-      criticalAlerts: alerts.filter(a => a.SEVERITY === "CRITICAL" || a.SEVERITY === "HIGH").length,
-      revenueGrowth,
-    };
-  }, [cars, rentals, alerts]);
-
-  // 2. Revenue Chart
-  const revenueChartData = useMemo(() => {
-    const days = timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 90;
-    const now = new Date();
-    const dataMap = new Map<string, number>();
-
-    for (let i = days - 1; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(now.getDate() - i);
-        const key = d.toISOString().split('T')[0];
-        dataMap.set(key, 0);
-    }
-
-    rentals.forEach(r => {
-        const dateKey = new Date(r.CREATED_AT).toISOString().split('T')[0];
-        if (dataMap.has(dateKey)) {
-            dataMap.set(dateKey, (dataMap.get(dateKey) || 0) + (r.TOTAL_AMOUNT || 0));
-        }
-    });
-
-    return Array.from(dataMap.entries()).map(([date, value]) => ({
-        name: new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-        value,
+  const rentalsChartData = useMemo(() => {
+    return rentalsData.map(p => ({
+      date: String(p.FULL_DATE || "").slice(5),
+      rentals: Number(p.VALUE || 0),
     }));
-  }, [rentals, timeRange]);
+  }, [rentalsData]);
 
-  // 3. Status Pie Chart
-  const carStatusData = useMemo(() => {
-    const counts: Record<string, number> = {};
-    cars.forEach(c => {
-        counts[c.STATUS] = (counts[c.STATUS] || 0) + 1;
-    });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [cars]);
+  const alertsChartData = useMemo(() => {
+    return alertsData.map(p => ({
+      date: String(p.FULL_DATE || "").slice(5),
+      alerts: Number(p.VALUE || 0),
+    }));
+  }, [alertsData]);
 
-  // 4. Branch Logic (Mocked revenue for visualization)
-  const topBranches = useMemo(() => {
-    const map = new Map<number, BranchPerformance>();
-    
-    branches.forEach(b => {
-        map.set(b.BRANCH_ID, {
-            id: b.BRANCH_ID,
-            name: b.CITY,
-            revenue: 0,
-            activeRentals: 0,
-            utilization: 0
-        });
-    });
+  const fleetStatus = useMemo(() => {
+    if (!overview) return [];
+    return [
+      { name: "Available", value: overview.fleet.available, color: "#10b981" },
+      { name: "Rented", value: overview.fleet.rented, color: "#3b82f6" },
+      { name: "Maintenance", value: overview.fleet.maintenance, color: "#f59e0b" },
+    ].filter(item => item.value > 0);
+  }, [overview]);
 
-    rentals.forEach(r => {
-        const car = cars.find(c => true); // Mock join for visualization
-        if (car && map.has(car.BRANCH_ID)) {
-             const b = map.get(car.BRANCH_ID)!;
-             b.revenue += (r.TOTAL_AMOUNT || 0);
-        }
-    });
+  const utilizationRate = useMemo(() => {
+    if (!overview?.fleet.total) return 0;
+    return Math.round((overview.fleet.rented / overview.fleet.total) * 100);
+  }, [overview]);
 
-    return Array.from(map.values())
-        .map(b => ({ ...b, revenue: Math.floor(Math.random() * 50000) + 10000 }))
-        .sort((a, b) => b.revenue - a.revenue)
-        .slice(0, 5);
-  }, [branches, rentals, cars]);
-
-
-  // 5. Activity Feed
-  const recentActivity = useMemo(() => {
-    const combined = [
-        ...rentals.map(r => ({
-            type: 'RENTAL',
-            date: new Date(r.CREATED_AT),
-            title: `New Rental #${r.RENTAL_ID}`,
-            desc: `${r.STATUS} - ${formatMoney(r.TOTAL_AMOUNT || 0)}`,
-            severity: 'success'
-        })),
-        ...alerts.map(a => ({
-            type: 'ALERT',
-            date: new Date(a.CREATED_AT),
-            title: `System Alert: ${a.SEVERITY}`,
-            desc: a.MESSAGE || "Anomaly Detected",
-            severity: a.SEVERITY === 'CRITICAL' ? 'danger' : 'warning'
-        })),
-        ...cars.filter(c => c.STATUS === 'MAINTENANCE').map(c => ({
-            type: 'MAINTENANCE',
-            date: new Date(), 
-            title: `Maintenance: ${c.MAKE} ${c.MODEL}`,
-            desc: 'Vehicle flagged for checkup',
-            severity: 'info'
-        }))
+  const performanceData = useMemo(() => {
+    if (!overview) return [];
+    const util = utilizationRate;
+    return [
+      { metric: "Utilization", value: util },
+      { metric: "Fleet Health", value: overview.fleet.maintenance === 0 ? 100 : Math.max(0, 100 - (overview.fleet.maintenance / overview.fleet.total) * 100) },
+      { metric: "Active Ops", value: overview.today.activeRentalsNow > 0 ? 90 : 50 },
+      { metric: "Alert Status", value: overview.today.alertsOpen === 0 ? 100 : Math.max(0, 100 - overview.today.alertsOpen * 10) },
+      { metric: "Revenue Flow", value: overview.today.revenueMAD > 0 ? 85 : 40 },
     ];
+  }, [overview, utilizationRate]);
 
-    return combined
-        .sort((a, b) => b.date.getTime() - a.date.getTime())
-        .slice(0, 6);
-  }, [rentals, alerts, cars]);
+  const fmtMAD = (v: number) => {
+    return new Intl.NumberFormat("fr-MA", {
+      style: "currency",
+      currency: "MAD",
+      maximumFractionDigits: 0,
+    }).format(v);
+  };
 
+  if (loading && !overview) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[#0a0a0a]">
+        <div className="text-center">
+          <div className="h-16 w-16 animate-spin rounded-full border-4 border-indigo-500/30 border-t-indigo-500 mx-auto" />
+          <p className="mt-4 text-neutral-400">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
 
-  if (loading) {
-      return (
-          <div className="flex h-[80vh] items-center justify-center">
-              <div className="flex flex-col items-center gap-4">
-                <RefreshCw className="h-10 w-10 animate-spin text-indigo-500" />
-                <p className="text-neutral-500 animate-pulse">Aggregating fleet analytics...</p>
-              </div>
-          </div>
-      );
+  if (error && !overview) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[#0a0a0a]">
+        <div className="text-center max-w-md">
+          <AlertTriangle className="h-16 w-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-white mb-2">Failed to Load Dashboard</h2>
+          <p className="text-neutral-400 mb-4">{error}</p>
+          <button
+            onClick={fetchData}
+            className="px-6 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-500 transition"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500 pb-10">
-      
-{/* DASHBOARD HEADER (actions only) */}
-<div className="flex items-center justify-end gap-3">
-  {/* Time range selector */}
-  <div className="flex items-center rounded-lg bg-[#18181b] p-1 border border-white/10">
-    {(["7d", "30d", "90d"] as const).map((range) => (
-      <button
-        key={range}
-        onClick={() => setTimeRange(range)}
-        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all ${
-          timeRange === range
-            ? "bg-indigo-600 text-white shadow-lg"
-            : "text-neutral-500 hover:text-white"
-        }`}
-      >
-        {range.toUpperCase()}
-      </button>
-    ))}
-  </div>
+    <div className="min-h-screen bg-[#0a0a0a] p-6">
+      <div className="mx-auto max-w-[1800px] space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-white">Fleet Command Center</h1>
+            <p className="mt-1 text-sm text-neutral-400">
+              Real-time analytics powered by{" "}
+              <span className={`font-bold ${overview?.source === "GOLD" ? "text-amber-400" : "text-blue-400"}`}>
+                {overview?.source || "GOLD"}
+              </span>{" "}
+              layer
+            </p>
+          </div>
 
-  {/* Refresh */}
-  <button
-    onClick={() => setRefreshKey((k) => k + 1)}
-    className="p-2.5 rounded-lg border border-white/10 bg-[#18181b] text-neutral-400 hover:text-white hover:bg-white/5 transition"
-    title="Refresh Data"
-  >
-    <RefreshCw size={18} />
-  </button>
-</div>
-
-
-      {/* KPI GRID */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-        <StatCard 
-            title="Total Revenue" 
-            value={formatNumber(stats.totalRevenue)} 
-            icon={DollarSign} 
-            color="indigo"
-            prefix="$"
-            trend={stats.revenueGrowth}
-        />
-        <StatCard 
-            title="Active Rentals" 
-            value={stats.activeRentals} 
-            icon={Car} 
-            color="emerald" 
-            trend={12}
-        />
-        <StatCard 
-            title="Fleet Utilization" 
-            value={stats.utilizationRate} 
-            icon={Activity} 
-            color="amber" 
-            suffix="%"
-            trend={-2}
-        />
-        <StatCard 
-            title="Critical Issues" 
-            value={stats.criticalAlerts} 
-            icon={AlertTriangle} 
-            color="rose" 
-        />
-      </div>
-
-      {/* MAIN CHARTS */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Revenue Chart */}
-        <div className="lg:col-span-2 rounded-2xl border border-white/5 bg-[#121212] p-6 shadow-xl">
-            <div className="flex items-center justify-between mb-6">
-                <div>
-                    <h3 className="text-lg font-bold text-white">Revenue Analytics</h3>
-                    <p className="text-xs text-neutral-500">Income trends over the last {timeRange}</p>
-                </div>
-            </div>
-            
-            <div className="h-[300px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={revenueChartData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                        <defs>
-                            <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor={COLORS.primary} stopOpacity={0.3}/>
-                                <stop offset="95%" stopColor={COLORS.primary} stopOpacity={0}/>
-                            </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} vertical={false} />
-                        <XAxis 
-                            dataKey="name" 
-                            stroke="#525252" 
-                            tick={{fontSize: 12}} 
-                            tickLine={false}
-                            axisLine={false}
-                            dy={10}
-                        />
-                        <YAxis 
-                            stroke="#525252" 
-                            tick={{fontSize: 12}} 
-                            tickLine={false}
-                            axisLine={false}
-                            tickFormatter={(v) => `$${v/1000}k`}
-                        />
-                        <Tooltip 
-                            contentStyle={{ backgroundColor: '#18181b', borderColor: '#333', borderRadius: '8px', color: '#fff' }}
-                            itemStyle={{ color: '#fff' }}
-                        />
-                        <Area 
-                            type="monotone" 
-                            dataKey="value" 
-                            stroke={COLORS.primary} 
-                            strokeWidth={3}
-                            fillOpacity={1} 
-                            fill="url(#colorRev)" 
-                            activeDot={{ r: 6, strokeWidth: 0 }}
-                        />
-                    </AreaChart>
-                </ResponsiveContainer>
-            </div>
-        </div>
-
-        {/* Status Chart */}
-        <div className="rounded-2xl border border-white/5 bg-[#121212] p-6 shadow-xl flex flex-col">
-            <h3 className="text-lg font-bold text-white mb-2">Fleet Status</h3>
-            <p className="text-xs text-neutral-500 mb-6">Real-time distribution of {cars.length} vehicles</p>
-            
-            <div className="flex-1 relative min-h-[200px]">
-                <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                        <Pie
-                            data={carStatusData}
-                            innerRadius={60}
-                            outerRadius={80}
-                            paddingAngle={5}
-                            dataKey="value"
-                            stroke="none"
-                        >
-                            {carStatusData.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                            ))}
-                        </Pie>
-                        <Tooltip contentStyle={{ backgroundColor: '#18181b', borderColor: '#333', borderRadius: '8px', color: '#fff' }} />
-                        <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                    </PieChart>
-                </ResponsiveContainer>
-                
-                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none pb-8">
-                    <span className="text-3xl font-bold text-white">{cars.length}</span>
-                    <span className="text-xs text-neutral-500 uppercase font-medium">Vehicles</span>
-                </div>
-            </div>
-            
-            <div className="mt-4 grid grid-cols-2 gap-3">
-                 <div className="rounded-xl bg-emerald-500/10 p-3 text-center">
-                    <div className="text-lg font-bold text-emerald-400">{cars.filter(c => c.STATUS === 'AVAILABLE').length}</div>
-                    <div className="text-[10px] text-emerald-200 uppercase tracking-wide">Ready</div>
-                 </div>
-                 <div className="rounded-xl bg-blue-500/10 p-3 text-center">
-                    <div className="text-lg font-bold text-blue-400">{cars.filter(c => c.STATUS === 'RENTED').length}</div>
-                    <div className="text-[10px] text-blue-200 uppercase tracking-wide">Rented</div>
-                 </div>
-            </div>
-        </div>
-      </div>
-
-      {/* SECONDARY ROW */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-         
-         {/* BRANCH TABLE */}
-         <div className="lg:col-span-2 rounded-2xl border border-white/5 bg-[#121212] p-6">
-            <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <MapPin className="text-indigo-500" size={20}/> Top Performing Branches
-                </h3>
-                <Link to="/branches" className="text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
-                    View All <ArrowRight size={12}/>
-                </Link>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-1">
+              {[7, 30, 90].map((days) => (
+                <button
+                  key={days}
+                  onClick={() => setTimeRange(days as 7 | 30 | 90)}
+                  className={`rounded-lg px-4 py-2 text-sm font-bold transition ${
+                    timeRange === days
+                      ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20"
+                      : "text-neutral-400 hover:text-white"
+                  }`}
+                >
+                  {days}d
+                </button>
+              ))}
             </div>
 
-            <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                    <thead>
-                        <tr className="border-b border-white/10 text-xs font-bold text-neutral-500 uppercase tracking-wider">
-                            <th className="pb-3 pl-2">Branch City</th>
-                            <th className="pb-3">Performance</th>
-                            <th className="pb-3 text-right">Revenue</th>
-                            <th className="pb-3 text-right pr-2">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                        {topBranches.map((branch, i) => (
-                            <tr key={branch.id} className="group transition-colors hover:bg-white/5">
-                                <td className="py-4 pl-2">
-                                    <div className="flex items-center gap-3">
-                                        <div className={`grid h-8 w-8 place-items-center rounded-lg font-bold text-xs ${
-                                            i === 0 ? "bg-amber-500/20 text-amber-400" :
-                                            i === 1 ? "bg-slate-400/20 text-slate-400" :
-                                            "bg-orange-700/20 text-orange-700"
-                                        }`}>
-                                            #{i+1}
-                                        </div>
-                                        <span className="font-medium text-white">{branch.name}</span>
-                                    </div>
-                                </td>
-                                <td className="py-4 w-1/3">
-                                    <div className="flex items-center gap-2">
-                                        <div className="h-1.5 w-full rounded-full bg-neutral-800 overflow-hidden">
-                                            <div 
-                                                className="h-full bg-indigo-500 rounded-full" 
-                                                style={{ width: `${Math.random() * 40 + 50}%` }} 
-                                            />
-                                        </div>
-                                    </div>
-                                </td>
-                                <td className="py-4 text-right font-mono font-medium text-emerald-400">
-                                    {formatMoney(branch.revenue)}
-                                </td>
-                                <td className="py-4 text-right pr-2">
-                                    <button className="text-neutral-500 hover:text-white transition">
-                                        <MoreHorizontal size={16} />
-                                    </button>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-         </div>
-
-         {/* ACTIVITY FEED */}
-         <div className="rounded-2xl border border-white/5 bg-[#121212] p-6 flex flex-col">
-            <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <Clock className="text-neutral-400" size={20}/> Live Feed
-                </h3>
-                <div className="flex gap-2">
-                    <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse"/>
-                </div>
-            </div>
-
-            <div className="space-y-1 overflow-y-auto max-h-[350px] pr-2 custom-scrollbar">
-                {recentActivity.map((item, idx) => {
-                    let Icon = Bell;
-                    let Tone: any = "neutral";
-                    if(item.type === 'RENTAL') { Icon = Car; Tone = "success"; }
-                    if(item.type === 'ALERT') { Icon = AlertTriangle; Tone = item.severity === 'danger' ? 'danger' : 'warning'; }
-                    if(item.type === 'MAINTENANCE') { Icon = Wrench; Tone = "info"; }
-
-                    return (
-                        <ActivityItem 
-                            key={idx}
-                            icon={Icon}
-                            title={item.title}
-                            desc={item.desc}
-                            time={item.date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                            tone={Tone}
-                        />
-                    );
-                })}
-                
-                {recentActivity.length === 0 && (
-                    <div className="text-center py-10 text-neutral-500 text-sm">
-                        No recent activity recorded.
-                    </div>
-                )}
-            </div>
-            
-            <button className="mt-auto pt-4 w-full text-center text-xs font-bold text-neutral-500 hover:text-white transition uppercase tracking-wide">
-                View All Activity
+            <button
+              onClick={fetchData}
+              disabled={loading}
+              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/10 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh
             </button>
-         </div>
-      </div>
+          </div>
+        </div>
 
-      {/* BOTTOM ROW: MAINTENANCE & ACTIONS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <div className="lg:col-span-3 rounded-2xl border border-white/5 bg-[#121212] p-6">
-              <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                      <Wrench className="text-amber-500" size={20} /> Maintenance Watchlist
-                  </h3>
-                  <Link to="/cars" className="text-xs font-bold text-indigo-400 hover:text-indigo-300">
-                      Manage Fleet
-                  </Link>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <MetricCard
+            icon={TrendingUp}
+            label="Revenue Today"
+            value={overview ? fmtMAD(overview.today.revenueMAD) : "—"}
+            change={12.5}
+            trend="up"
+            color="from-emerald-500 to-teal-500"
+            subtitle="Gross daily revenue"
+            isLoading={loading}
+          />
+          <MetricCard
+            icon={Activity}
+            label="Rentals Today"
+            value={overview?.today.rentals.toString() || "—"}
+            change={8.2}
+            trend="up"
+            color="from-blue-500 to-cyan-500"
+            subtitle="Daily rental count"
+            isLoading={loading}
+          />
+          <MetricCard
+            icon={Car}
+            label="Active Now"
+            value={overview?.today.activeRentalsNow.toString() || "—"}
+            color="from-purple-500 to-pink-500"
+            subtitle="Currently on road"
+            isLoading={loading}
+          />
+          <MetricCard
+            icon={Bell}
+            label="Open Alerts"
+            value={overview?.today.alertsOpen.toString() || "—"}
+            change={overview?.today.alertsOpen === 0 ? undefined : 15.4}
+            trend="down"
+            color="from-amber-500 to-orange-500"
+            subtitle="Needs attention"
+            isLoading={loading}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <GlowingCard title="Fleet Distribution" subtitle="Current vehicle status" className="lg:col-span-1" icon={PieChartIcon}>
+            {fleetStatus.length === 0 ? (
+              <div className="flex h-[240px] items-center justify-center text-neutral-500">
+                No fleet data
               </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {cars.filter(c => c.STATUS === 'MAINTENANCE' || c.ODOMETER_KM > 100000).slice(0, 3).map(car => (
-                      <div key={car.CAR_ID} className="flex gap-4 p-4 rounded-xl bg-neutral-900 border border-white/5 hover:border-amber-500/30 transition">
-                          <div className="h-12 w-12 rounded-lg bg-neutral-800 grid place-items-center shrink-0">
-                                <Car className="text-neutral-400" />
-                          </div>
-                          <div>
-                                <h4 className="font-bold text-white text-sm">{car.MAKE} {car.MODEL}</h4>
-                                <div className="text-xs text-neutral-400 mt-1">ID: #{car.CAR_ID}</div>
-                                <div className="mt-2 inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-400">
-                                    {car.ODOMETER_KM > 100000 ? "HIGH MILEAGE" : "SERVICE DUE"}
-                                </div>
-                          </div>
-                      </div>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={240}>
+                  <PieChart>
+                    <Pie
+                      data={fleetStatus}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={90}
+                      paddingAngle={2}
+                      dataKey="value"
+                    >
+                      {fleetStatus.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#1a1a1a",
+                        border: "1px solid rgba(255,255,255,0.1)",
+                        borderRadius: "8px",
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  {fleetStatus.map((item) => (
+                    <div key={item.name} className="flex items-center gap-2">
+                      <Circle className="h-3 w-3" fill={item.color} color={item.color} />
+                      <span className="text-xs text-neutral-400">{item.name}</span>
+                      <span className="ml-auto text-sm font-bold text-white">{item.value}</span>
+                    </div>
                   ))}
-                  
-                  {cars.filter(c => c.STATUS === 'MAINTENANCE').length === 0 && (
-                      <div className="col-span-3 py-8 text-center rounded-xl border border-dashed border-white/10 bg-white/[0.02]">
-                          <ShieldCheck className="mx-auto h-8 w-8 text-emerald-500/50 mb-2"/>
-                          <p className="text-sm text-neutral-400">Fleet is healthy. No maintenance required.</p>
-                      </div>
-                  )}
-              </div>
-          </div>
+                  <div className="col-span-2 mt-2 pt-2 border-t border-white/10">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-neutral-500">Total Fleet</span>
+                      <span className="text-sm font-bold text-white">{overview?.fleet.total || 0}</span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </GlowingCard>
 
-          <div className="rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-700 p-6 text-white shadow-xl relative overflow-hidden group">
-               <div className="relative z-10 h-full flex flex-col">
-                   <h3 className="text-xl font-bold mb-1">Quick Action</h3>
-                   <p className="text-indigo-100 text-sm mb-6 opacity-90">Create a new rental agreement instantly.</p>
-                   
-                   <Link 
-                     to="/rentals/new"
-                     className="mt-auto flex items-center justify-center gap-2 rounded-xl bg-white text-indigo-600 py-3 font-bold hover:bg-indigo-50 transition shadow-lg"
-                   >
-                       <Zap size={18} fill="currentColor" /> New Rental
-                   </Link>
-               </div>
-               
-               <div className="absolute top-[-20%] right-[-20%] h-40 w-40 rounded-full bg-white/10 blur-3xl transition-transform group-hover:scale-150 duration-700" />
-               <div className="absolute bottom-[-10%] left-[-10%] h-32 w-32 rounded-full bg-black/10 blur-2xl" />
-          </div>
+          <GlowingCard title="Performance Metrics" subtitle="Multi-dimensional health check" className="lg:col-span-2" icon={BarChart3}>
+            {performanceData.length === 0 ? (
+              <div className="flex h-[280px] items-center justify-center text-neutral-500">
+                No performance data
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={280}>
+                <RadarChart data={performanceData}>
+                  <PolarGrid stroke="rgba(255,255,255,0.1)" />
+                  <PolarAngleAxis dataKey="metric" tick={{ fill: "#9ca3af", fontSize: 12 }} />
+                  <PolarRadiusAxis angle={90} domain={[0, 100]} tick={{ fill: "#9ca3af" }} />
+                  <Radar
+                    name="Performance"
+                    dataKey="value"
+                    stroke="#6366f1"
+                    fill="#6366f1"
+                    fillOpacity={0.3}
+                    strokeWidth={2}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#1a1a1a",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      borderRadius: "8px",
+                    }}
+                  />
+                </RadarChart>
+              </ResponsiveContainer>
+            )}
+          </GlowingCard>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <GlowingCard title="Rentals Trend" subtitle={`Last ${timeRange} days`} icon={LineChartIcon}>
+            {rentalsChartData.length === 0 ? (
+              <div className="flex h-[300px] items-center justify-center text-neutral-500">
+                No rental data for this period
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <AreaChart data={rentalsChartData}>
+                  <defs>
+                    <linearGradient id="rentalGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="date" tick={{ fill: "#9ca3af", fontSize: 11 }} />
+                  <YAxis allowDecimals={false} tick={{ fill: "#9ca3af", fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#1a1a1a",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      borderRadius: "8px",
+                    }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="rentals"
+                    stroke="#3b82f6"
+                    strokeWidth={3}
+                    fill="url(#rentalGradient)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </GlowingCard>
+
+          <GlowingCard title="Alerts Distribution" subtitle={`Last ${timeRange} days`} icon={Bell}>
+            {alertsChartData.length === 0 ? (
+              <div className="flex h-[300px] items-center justify-center text-neutral-500">
+                No alerts data for this period
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={alertsChartData}>
+                  <defs>
+                    <linearGradient id="alertGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.8} />
+                      <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.3} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="date" tick={{ fill: "#9ca3af", fontSize: 11 }} />
+                  <YAxis allowDecimals={false} tick={{ fill: "#9ca3af", fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#1a1a1a",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      borderRadius: "8px",
+                    }}
+                  />
+                  <Bar dataKey="alerts" fill="url(#alertGradient)" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </GlowingCard>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-6">
+          <StatBadge icon={Car} label="Total Fleet" value={overview?.fleet.total.toString() || "0"} color="blue" />
+          <StatBadge icon={Gauge} label="Available" value={overview?.fleet.available.toString() || "0"} color="green" />
+          <StatBadge icon={TrendingUp} label="Rented" value={overview?.fleet.rented.toString() || "0"} color="purple" />
+          <StatBadge icon={Wrench} label="Maintenance" value={overview?.fleet.maintenance.toString() || "0"} color="amber" />
+          <StatBadge icon={Zap} label="Utilization" value={`${utilizationRate}%`} color={utilizationRate >= 70 ? "green" : "gray"} />
+          <StatBadge icon={Users} label="Active Ops" value={overview?.today.activeRentalsNow.toString() || "0"} color="blue" />
+        </div>
+
+        <div className="text-xs text-neutral-600 flex items-center justify-between">
+          <span>
+            Analytics Source: <strong className={overview?.source === "GOLD" ? "text-amber-400" : "text-blue-400"}>{overview?.source || "GOLD"}</strong> layer
+            {overview?.source === "SILVER" && " (fallback mode - GOLD unavailable)"}
+          </span>
+          <span>Last updated: {new Date().toLocaleTimeString()}</span>
+        </div>
       </div>
     </div>
   );

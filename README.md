@@ -160,8 +160,7 @@ Look for: `DATABASE IS READY TO USE!`
 This creates: `RAW_LAYER`, `SILVER_LAYER`, `GOLD_LAYER` + their tablespaces.
 
 ```bash
-docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
-  "sqlplus -s system/Admin#123@localhost:1521/XEPDB1 @/scripts/scripts/oracle_medallion_setup.sql"
+docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc "sqlplus -s system/Admin#123@localhost:1521/XEPDB1 @/scripts/scripts/oracle_medallion_setup.sql"
 ```
 
 ### Step 2: Build SILVER Layer (Operational Model)
@@ -170,8 +169,7 @@ docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
 We create all operational tables directly in `SILVER_LAYER`:
 
 ```bash
-docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
-  "sqlplus -s silver_layer/Silver#123@localhost:1521/XEPDB1 @/scripts/schema/silver.sql"
+docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc "sqlplus -s silver_layer/Silver#123@localhost:1521/XEPDB1 @/scripts/schema/silver.sql"
 ```
 
 **Creates (in SILVER_LAYER):**
@@ -188,8 +186,7 @@ docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
 Deploy Gold (facts, dims, views, KPI views, package loader):
 
 ```bash
-docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc \
-  "sqlplus -s gold_layer/Gold#123@localhost:1521/XEPDB1 @/scripts/schema/gold.sql"
+docker exec -it car-rental-bi-platform-oracle-xe-1 bash -lc "sqlplus -s gold_layer/Gold#123@localhost:1521/XEPDB1 @/scripts/schema/gold.sql"
 ```
 
 ✅ You should see:
@@ -223,7 +220,7 @@ pip install pandas sqlalchemy oracledb
 > We currently use **only**:
 
 * `01_seed_static.py`
-* `04_live_iot_simulator.py`
+* `02_live_iot_simulator.py`
 
 ### Script 1: Seed Static Data (`01_seed_static.py`)
 
@@ -236,12 +233,12 @@ Seeds:
 
 * Branches, Managers, Categories, Devices, Cars, Customers
 
-### Script 2: Live IoT Simulation (`04_live_iot_simulator.py`)
+### Script 2: Live IoT Simulation (`02_live_iot_simulator.py`)
 
 This script simulates “live telemetry” by pushing rows into `RT_IOT_FEED` (and optionally telemetry history depending on script behavior).
 
 ```bash
-python 04_live_iot_simulator.py
+python 02_live_iot_simulator.py
 ```
 
 > Use this for the Live Monitor page.
@@ -268,9 +265,7 @@ car-rental-bi-platform/
 │   │   └── connexion/
 │   └── generator/
 │       ├── 01_seed_static.py
-│       ├── 02_generate_iot_telemetry.py   # (not used currently)
-│       ├── 03_stream_iot_data.py          # (not used currently)
-│       ├── 04_live_iot_simulator.py       # CURRENT
+│       ├── 02_live_iot_simulator.py       # CURRENT
 │       └── seed_data.json
 └── README.md
 ```

@@ -32,11 +32,14 @@ function fmtDate(v: string) {
 
 function money(v: number | null, c: string | null) {
   if (v == null) return "—";
-  return new Intl.NumberFormat("en-US", {
+  const currency = !c || c === "SIM" ? "MAD" : c; // ✅ treat SIM as MAD for formatting
+  return new Intl.NumberFormat("fr-MA", {
     style: "currency",
-    currency: c || "USD",
+    currency,
   }).format(v);
 }
+
+
 
 function badgeTone(status: string, driving?: number) {
   if (driving === 1) return "indigo";
@@ -53,7 +56,7 @@ export function RentalsPage() {
 
   async function load() {
     setLoading(true);
-    const res = await fetch(`${API_URL}/api/v1/rentals`, {
+    const res = await fetch(`${API_URL}/api/v1/rentals?all=1`, {
       headers: {
         Accept: "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),

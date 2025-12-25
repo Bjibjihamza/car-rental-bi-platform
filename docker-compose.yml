@@ -24,13 +24,12 @@ services:
       test:
         [
           "CMD-SHELL",
-          "echo \"select 1 from dual;\" | sqlplus -s system/\"$$ORACLE_PASSWORD\"@localhost:1521/XEPDB1 | grep -q 1"
+          "echo \"select 1 from dual;\" | sqlplus -s system/\"$$ORACLE_PASSWORD\"@localhost:1521/XEPDB1 | grep -q 1",
         ]
       interval: 10s
       timeout: 10s
       retries: 60
       start_period: 180s
-
 
   api:
     build:
@@ -44,9 +43,13 @@ services:
       ORACLE_PORT: "1521"
       ORACLE_SERVICE: "XEPDB1"
 
-      # IMPORTANT: this user/password must exist in the DB
-      ORACLE_USER: "raw_layer"
-      ORACLE_PASSWORD: "Raw#123"
+      # ✅ DEFAULT = SILVER (CRUD / app routes)
+      ORACLE_USER: "silver_layer"
+      ORACLE_PASSWORD: "Silver#123"
+
+      # ✅ OPTIONAL = GOLD (analytics / dashboards routes)
+      ORACLE_GOLD_USER: "gold_layer"
+      ORACLE_GOLD_PASSWORD: "Gold#123"
 
       PORT: "8000"
       FRONTEND_ORIGIN: "http://localhost:5173"

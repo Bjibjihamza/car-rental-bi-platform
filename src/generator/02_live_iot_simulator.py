@@ -1,11 +1,11 @@
 # ============================================================
-# 04_live_iot_simulator.py  (MERGED 02 + 03)
+# 02_live_iot_simulator.py
 # ============================================================
 # Real-time IoT simulator (15s ticks)
 #
 # GOALS:
 # - Generate telemetry LIVE (no 7-day plan)
-# - Write directly into RAW_LAYER.RT_IOT_FEED
+# - Write directly into SILVER_LAYER.RT_IOT_FEED
 # - Create / close RENTALS from ENGINE_START / ENGINE_STOP
 # - Update CARS status + odometer
 # - Insert IOT_ALERTS with cooldown dedup
@@ -15,6 +15,7 @@
 #
 # This script is meant for demos: run, watch UI, stop when you want.
 # ============================================================
+
 
 from __future__ import annotations
 
@@ -32,10 +33,10 @@ from sqlalchemy import create_engine, text
 # CONFIG
 # ==============================
 
-SCHEMA = "RAW_LAYER"
+SCHEMA = "SILVER_LAYER"
 
 ORACLE_URL = "oracle+oracledb://"
-CONNECT_ARGS = {"user": "raw_layer", "password": "Raw#123", "dsn": "localhost:1521/XEPDB1"}
+CONNECT_ARGS = {"user": "silver_layer", "password": "Silver#123", "dsn": "localhost:1521/XEPDB1"}
 
 TICK_SEC = 15
 SPEEDUP = 1.0  # 2.0 = twice faster, etc.
@@ -49,7 +50,12 @@ WRITE_HISTORY_IOT_TELEMETRY = False
 RESET_RENTALS_CREATED_BY_SIM = True
 
 # used to mark simulator rentals (so we don’t delete manual ones)
-SIM_MARK_CURRENCY = "SIM"  # rental row will have CURRENCY='SIM'
+SIM_MARK_CURRENCY = "SIM"        # ✅ valid ISO currency for UI
+SIM_STATUS_ACTIVE = "ACTIVE_SIM" # ✅ mark simulator rentals via STATUS
+SIM_STATUS_CLOSED = "CLOSED_SIM"
+UI_CURRENCY = "MAD"         # ✅ what you want to show in UI formatting (optional)
+
+SIM_TAG_MANAGER_ID = -9999  # ✅ use manager id as marker for simulator rows (safe for demo)
 
 # basic driving activity probabilities (per car per tick)
 P_START_ENGINE_IF_OFF = 0.03
@@ -274,43 +280,98 @@ def load_cars(conn) -> pd.DataFrame:
     return to_upper_cols(df)
 
 def reset_tables(conn):
-    # keep it simple: clear live buffers + alerts
     conn.execute(text("DELETE FROM RT_IOT_FEED"))
     conn.execute(text("DELETE FROM IOT_ALERTS"))
     if WRITE_HISTORY_IOT_TELEMETRY:
         conn.execute(text("DELETE FROM IOT_TELEMETRY"))
 
-    # rentals: delete only those created by simulator (currency='SIM')
     if RESET_RENTALS_CREATED_BY_SIM:
-        # First free cars status
-        conn.execute(text("""
-            UPDATE CARS
+        # free cars for simulator rentals
+        conn.execute(text(f"""
+            UPDATE {SCHEMA}.CARS
                SET STATUS='AVAILABLE'
-             WHERE CAR_ID IN (SELECT CAR_ID FROM RENTALS WHERE CURRENCY=:cur)
+             WHERE CAR_ID IN (
+               SELECT CAR_ID
+               FROM {SCHEMA}.RENTALS
+               WHERE CURRENCY = :cur
+             )
         """), {"cur": SIM_MARK_CURRENCY})
 
-        conn.execute(text("DELETE FROM RENTALS WHERE CURRENCY=:cur"), {"cur": SIM_MARK_CURRENCY})
+        # delete simulator rentals only
+        conn.execute(text(f"""
+            DELETE FROM {SCHEMA}.RENTALS
+             WHERE CURRENCY = :cur
+        """), {"cur": SIM_MARK_CURRENCY})
 
 # ==============================
 # RENTAL HELPERS
 # ==============================
-
 def get_active_rental(conn, car_id: int) -> Optional[int]:
-    row = conn.execute(text("""
+    row = conn.execute(text(f"""
         SELECT RENTAL_ID
-        FROM RENTALS
-        WHERE CAR_ID=:cid AND STATUS='ACTIVE'
+        FROM {SCHEMA}.RENTALS
+        WHERE CAR_ID=:cid
+          AND STATUS IN ('ACTIVE','IN_PROGRESS')
         ORDER BY RENTAL_ID DESC
         FETCH FIRST 1 ROWS ONLY
     """), {"cid": car_id}).fetchone()
     return int(row[0]) if row else None
 
+def category_price_range_mad(category: str) -> tuple[float, float]:
+    """
+    Non-random ranges by category:
+      - ECONOMY: 200..400
+      - ELECTRIC: 300..500
+      - LUXURY: 800..1200
+      - SUV, VAN: 500..1000
+      - default: 200..1000
+    """
+    c = (category or "").upper().strip()
+
+    if c == "ECONOMY":
+        return (200.0, 400.0)
+    if c == "ELECTRIC":
+        return (300.0, 500.0)
+    if c == "LUXURY":
+        return (800.0, 1200.0)
+    if c in ("SUV", "VAN"):
+        return (500.0, 1000.0)
+
+    return (200.0, 1000.0)
+
+def clamp_price_day_mad(category: str, day_price: float) -> float:
+    lo, hi = category_price_range_mad(category)
+    return float(clamp(float(day_price), lo, hi))
+
+def is_car_available_for_rental(conn, car_id: int) -> bool:
+    """
+    Car can start a rental only if:
+    - car status is AVAILABLE
+    - and no ACTIVE/IN_PROGRESS rental exists
+    """
+    r = conn.execute(text(f"""
+        SELECT STATUS
+        FROM {SCHEMA}.CARS
+        WHERE CAR_ID=:cid
+    """), {"cid": car_id}).fetchone()
+
+    if not r:
+        return False
+
+    car_status = str(r[0] or "").upper().strip()
+    if car_status != "AVAILABLE":
+        return False
+
+    return get_active_rental(conn, car_id) is None
+
 def create_rental(conn, *, car_id: int, branch_id: int, customer_id: int, manager_id: int,
                   start_ts: datetime, start_odo: float, category: str) -> int:
-    day_price = PRICING_DAY.get(category.upper(), 300)
-    due_at = start_ts + timedelta(days=2)
+    base_day = PRICING_DAY.get((category or "").upper(), 300)
+    day_price = clamp_price_day_mad(category, base_day)
 
-    # Use DBAPI RETURNING
+    due_at = start_ts + timedelta(days=2)
+    total_amount = float(day_price * 2)
+
     raw = conn.connection
     cur = raw.cursor()
     out_id = cur.var(int)
@@ -332,12 +393,12 @@ def create_rental(conn, *, car_id: int, branch_id: int, customer_id: int, manage
         "cid": car_id,
         "cust": customer_id,
         "bid": branch_id,
-        "mid": manager_id,
+        "mid": int(manager_id),      # ✅ real manager (FK ok)
         "start_at": start_ts,
         "due_at": due_at,
         "odo": float(start_odo),
-        "amt": float(day_price * 2),
-        "cur": SIM_MARK_CURRENCY,
+        "amt": total_amount,
+        "cur": SIM_MARK_CURRENCY,    # ✅ SIM marker
         "out_id": out_id,
     })
 
@@ -347,6 +408,7 @@ def create_rental(conn, *, car_id: int, branch_id: int, customer_id: int, manage
 
     conn.execute(text(f"UPDATE {SCHEMA}.CARS SET STATUS='RENTED' WHERE CAR_ID=:cid"), {"cid": car_id})
     return rid
+
 
 def close_rental(conn, *, rental_id: int, car_id: int, end_ts: datetime, end_odo: float):
     conn.execute(text(f"""
@@ -643,6 +705,7 @@ def tick_one_car(s: CarState, dt_s: int) -> dict:
         "CREATED_AT": event_ts,
     }
 
+
 # ==============================
 # MAIN LOOP
 # ==============================
@@ -697,6 +760,7 @@ def main():
                 ev = str(r["EVENT_TYPE"] or "").upper()
                 ts = r["EVENT_TS"]
                 odo = float(r["ODOMETER_KM"])
+
                 speed = safe_num(r.get("SPEED_KMH"))
                 temp = safe_num(r.get("ENGINE_TEMP_C"))
                 fuel = safe_num(r.get("FUEL_LEVEL_PCT"))
@@ -707,21 +771,26 @@ def main():
                     rental_ids_for_rows.append(None)
                     continue
 
+                # current active rental for this car (ACTIVE or IN_PROGRESS)
                 active_rental = get_active_rental(conn, car_id)
 
-                # CREATE
+                # CREATE (only if car is truly free: AVAILABLE + no active rental)
                 if ev == "ENGINE_START" and not active_rental:
-                    rid = create_rental(
-                        conn,
-                        car_id=car_id,
-                        branch_id=st.branch_id,
-                        customer_id=random.choice(customers),
-                        manager_id=supervisor_id,
-                        start_ts=ts,
-                        start_odo=odo,
-                        category=st.category,
-                    )
-                    active_rental = rid
+                    if is_car_available_for_rental(conn, car_id):
+                        rid = create_rental(
+                            conn,
+                            car_id=car_id,
+                            branch_id=st.branch_id,
+                            customer_id=random.choice(customers),
+                            manager_id=supervisor_id,
+                            start_ts=ts,
+                            start_odo=odo,
+                            category=st.category,
+                        )
+                        active_rental = rid
+                    else:
+                        # car is already rented (manual or simulator) -> do NOT create a new rental
+                        active_rental = get_active_rental(conn, car_id)
 
                 # CLOSE
                 if ev == "ENGINE_STOP" and active_rental:
@@ -771,7 +840,14 @@ def main():
             # optional history
             if WRITE_HISTORY_IOT_TELEMETRY:
                 hist = df_to_insert.drop(columns=["RECEIVED_AT"]).copy()
-                hist.to_sql("IOT_TELEMETRY", conn, schema=SCHEMA, if_exists="append", index=False, chunksize=2000)
+                hist.to_sql(
+                    "IOT_TELEMETRY",
+                    conn,
+                    schema=SCHEMA,
+                    if_exists="append",
+                    index=False,
+                    chunksize=2000,
+                )
 
         print(f"✅ Tick wrote {len(df):,} rows | {now_ts.strftime('%H:%M:%S')}")
 
@@ -781,3 +857,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

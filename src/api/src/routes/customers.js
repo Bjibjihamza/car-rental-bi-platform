@@ -1,21 +1,17 @@
 // src/api/src/routes/customers.js
+// ✅ FULL FILE — compatible with SILVER_LAYER.CUSTOMERS, scoped by role/branch
 
 const express = require("express");
 const router = express.Router();
 const oracledb = require("oracledb");
 const { getConnection } = require("../db");
 const { authMiddleware } = require("../authMiddleware");
-const {
-  isSupervisor,
-  requireManager,
-  requireManagerId,
-  requireBranch,
-} = require("../access");
+const { isSupervisor, requireManager, requireManagerId, requireBranch } = require("../access");
 
 /**
  * GET /api/v1/customers
- * - supervisor: can view all customers
- * - manager: can view only customers in their branch
+ * - supervisor: all customers
+ * - manager: only customers in their branch
  */
 router.get("/", authMiddleware, async (req, res) => {
   let conn;
@@ -41,21 +37,16 @@ router.get("/", authMiddleware, async (req, res) => {
 
     if (!isSupervisor(req)) {
       sql += ` WHERE c.BRANCH_ID = :branchId`;
-      binds.branchId = requireBranch(req);
+      binds.branchId = Number(requireBranch(req));
     }
 
     sql += ` ORDER BY c.CUSTOMER_ID DESC`;
 
-    const r = await conn.execute(sql, binds, {
-      outFormat: oracledb.OUT_FORMAT_OBJECT,
-    });
-
-    res.json(r.rows || []);
+    const r = await conn.execute(sql, binds, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+    return res.json(r.rows || []);
   } catch (e) {
     console.error("CUSTOMERS_GET_ERROR:", e);
-    res
-      .status(e.status || 500)
-      .json({ message: e.message || "Failed to fetch customers" });
+    return res.status(e.status || 500).json({ message: e.message || "Failed to fetch customers" });
   } finally {
     try {
       if (conn) await conn.close();
@@ -66,8 +57,8 @@ router.get("/", authMiddleware, async (req, res) => {
 /**
  * POST /api/v1/customers
  * - only MANAGER can create
- * - customer is created in manager's branch
- * - MANAGER_ID is set to creator
+ * - customer created in manager's branch
+ * - MANAGER_ID = creator
  */
 router.post("/", authMiddleware, async (req, res) => {
   let conn;
@@ -79,12 +70,8 @@ router.post("/", authMiddleware, async (req, res) => {
     const LAST_NAME = String(body.LAST_NAME || "").trim();
 
     const NATIONAL_ID = body.NATIONAL_ID ? String(body.NATIONAL_ID).trim() : "";
-    const DRIVER_LICENSE_NO = body.DRIVER_LICENSE_NO
-      ? String(body.DRIVER_LICENSE_NO).trim()
-      : "";
-    const DATE_OF_BIRTH = body.DATE_OF_BIRTH
-      ? String(body.DATE_OF_BIRTH).trim()
-      : ""; // YYYY-MM-DD
+    const DRIVER_LICENSE_NO = body.DRIVER_LICENSE_NO ? String(body.DRIVER_LICENSE_NO).trim() : "";
+    const DATE_OF_BIRTH = body.DATE_OF_BIRTH ? String(body.DATE_OF_BIRTH).trim() : ""; // YYYY-MM-DD
 
     const EMAIL = body.EMAIL ? String(body.EMAIL).trim() : null;
     const PHONE = body.PHONE ? String(body.PHONE).trim() : null;
@@ -92,21 +79,13 @@ router.post("/", authMiddleware, async (req, res) => {
     if (!FIRST_NAME) return res.status(400).json({ message: "FIRST_NAME is required" });
     if (!LAST_NAME) return res.status(400).json({ message: "LAST_NAME is required" });
     if (!NATIONAL_ID) return res.status(400).json({ message: "NATIONAL_ID is required" });
-    if (!DATE_OF_BIRTH) {
-      return res
-        .status(400)
-        .json({ message: "DATE_OF_BIRTH is required (YYYY-MM-DD)" });
-    }
-    if (!DRIVER_LICENSE_NO) {
-      return res
-        .status(400)
-        .json({ message: "DRIVER_LICENSE_NO is required" });
-    }
+    if (!DATE_OF_BIRTH) return res.status(400).json({ message: "DATE_OF_BIRTH is required (YYYY-MM-DD)" });
+    if (!DRIVER_LICENSE_NO) return res.status(400).json({ message: "DRIVER_LICENSE_NO is required" });
 
     conn = await getConnection();
 
-    const branchId = requireBranch(req);
-    const managerId = requireManagerId(req);
+    const branchId = Number(requireBranch(req));
+    const managerId = Number(requireManagerId(req));
 
     const sql = `
       INSERT INTO CUSTOMERS (
@@ -143,7 +122,7 @@ router.post("/", authMiddleware, async (req, res) => {
       { autoCommit: true }
     );
 
-    res.status(201).json({
+    return res.status(201).json({
       CUSTOMER_ID: r.outBinds.outId[0],
       BRANCH_ID: branchId,
       MANAGER_ID: managerId,
@@ -151,13 +130,9 @@ router.post("/", authMiddleware, async (req, res) => {
   } catch (e) {
     console.error("CUSTOMERS_POST_ERROR:", e);
     if (String(e.message || "").includes("ORA-00001")) {
-      return res
-        .status(409)
-        .json({ message: "Duplicate NATIONAL_ID / DRIVER_LICENSE_NO / EMAIL" });
+      return res.status(409).json({ message: "Duplicate NATIONAL_ID / DRIVER_LICENSE_NO / EMAIL" });
     }
-    res
-      .status(e.status || 500)
-      .json({ message: e.message || "Failed to create customer" });
+    return res.status(e.status || 500).json({ message: e.message || "Failed to create customer" });
   } finally {
     try {
       if (conn) await conn.close();
@@ -180,7 +155,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 
     conn = await getConnection();
 
-    const branchId = requireBranch(req);
+    const branchId = Number(requireBranch(req));
 
     const r = await conn.execute(
       `DELETE FROM CUSTOMERS WHERE CUSTOMER_ID = :id AND BRANCH_ID = :branchId`,
@@ -192,12 +167,10 @@ router.delete("/:id", authMiddleware, async (req, res) => {
       return res.status(404).json({ message: "Customer not found in your branch" });
     }
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     console.error("CUSTOMERS_DELETE_ERROR:", e);
-    res
-      .status(e.status || 500)
-      .json({ message: e.message || "Failed to delete customer" });
+    return res.status(e.status || 500).json({ message: e.message || "Failed to delete customer" });
   } finally {
     try {
       if (conn) await conn.close();

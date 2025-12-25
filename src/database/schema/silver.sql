@@ -1,46 +1,87 @@
 -- ======================================================================
--- CAR RENTAL DB — CORE STRUCTURE (UPDATED WITH RT_FEED)
--- Target schema: SILVER_LAYER
--- Compatibility: Oracle 12c+ (IDENTITY)
+-- silver.sql — SILVER layer (Operational DB / OLTP)
+-- Schema: SILVER_LAYER
+-- Oracle: 12c+ (IDENTITY)
+--
+-- Notes:
+-- - SILVER is source of truth (CRUD from API)
+-- - RT_IOT_FEED is a real-time buffer used by UI / demo simulator
+-- - IOT_ALERTS structure is compatible with your simulator + GOLD loads
 -- ======================================================================
 
 WHENEVER SQLERROR CONTINUE
 SET DEFINE OFF
 SET SERVEROUTPUT ON SIZE UNLIMITED
+SET FEEDBACK ON
+SET VERIFY OFF
+SET PAGESIZE 200
+SET LINESIZE 200
 
 ALTER SESSION SET CURRENT_SCHEMA = SILVER_LAYER;
+
+PROMPT [SILVER] Starting deploy...
 
 -- ======================================================================
 -- 1) DROP PHASE (Idempotent)
 -- ======================================================================
-
 BEGIN
-  FOR t IN (SELECT object_name FROM user_objects WHERE object_type = 'TRIGGER'
-            AND object_name IN ('TRG_RES_AIUD_STATUS','TRG_RENT_AIUD_STATUS')) LOOP
+  -- Triggers
+  FOR t IN (
+    SELECT object_name
+    FROM user_objects
+    WHERE object_type='TRIGGER'
+      AND object_name IN ('TRG_RES_AIUD_STATUS','TRG_RENT_AIUD_STATUS')
+  ) LOOP
     EXECUTE IMMEDIATE 'DROP TRIGGER '||t.object_name;
   END LOOP;
 
-  FOR s IN (SELECT object_name FROM user_objects WHERE object_type = 'PACKAGE'
-            AND object_name = 'PKG_RENTAL') LOOP
-    EXECUTE IMMEDIATE 'DROP PACKAGE PKG_RENTAL';
+  -- Package
+  FOR p IN (
+    SELECT object_name
+    FROM user_objects
+    WHERE object_type='PACKAGE'
+      AND object_name IN ('PKG_RENTAL')
+  ) LOOP
+    EXECUTE IMMEDIATE 'DROP PACKAGE '||p.object_name;
   END LOOP;
 
-  FOR f IN (SELECT object_name FROM user_objects WHERE object_type = 'FUNCTION'
-            AND object_name IN ('FN_CAR_AVAILABLE','FN_CAR_AVAILABLE_EXCL_RES','FN_PERIODS_OVERLAP')) LOOP
+  -- Functions
+  FOR f IN (
+    SELECT object_name
+    FROM user_objects
+    WHERE object_type='FUNCTION'
+      AND object_name IN ('FN_CAR_AVAILABLE_EXCL_RES','FN_PERIODS_OVERLAP')
+  ) LOOP
     EXECUTE IMMEDIATE 'DROP FUNCTION '||f.object_name;
   END LOOP;
 
-  FOR v IN (SELECT view_name FROM user_views
-            WHERE view_name IN ('VW_FAILED_OPS_DAILY', 'VW_CAR_INVENTORY')) LOOP
+  -- Views
+  FOR v IN (
+    SELECT view_name
+    FROM user_views
+    WHERE view_name IN ('VW_FAILED_OPS_DAILY','VW_CAR_INVENTORY')
+  ) LOOP
     EXECUTE IMMEDIATE 'DROP VIEW '||v.view_name;
   END LOOP;
 
+  -- Tables (children first)
   FOR t IN (
-    SELECT table_name FROM user_tables WHERE table_name IN (
+    SELECT table_name
+    FROM user_tables
+    WHERE table_name IN (
       'RT_IOT_FEED',
-      'IOT_TELEMETRY', 'IOT_ALERTS', 'RENTALS', 'CUSTOMERS',
-      'CARS', 'IOT_DEVICES', 'CAR_CATEGORIES', 'MANAGERS', 'BRANCHES',
-      'FAILED_OPS', 'RESERVATIONS', 'RT_EVENTS'
+      'IOT_TELEMETRY',
+      'IOT_ALERTS',
+      'RENTALS',
+      'RESERVATIONS',
+      'CUSTOMERS',
+      'CARS',
+      'IOT_DEVICES',
+      'CAR_CATEGORIES',
+      'MANAGERS',
+      'BRANCHES',
+      'FAILED_OPS',
+      'RT_EVENTS'
     )
   ) LOOP
     EXECUTE IMMEDIATE 'DROP TABLE '||t.table_name||' CASCADE CONSTRAINTS PURGE';
@@ -48,6 +89,8 @@ BEGIN
 END;
 /
 COMMIT;
+
+PROMPT [SILVER] Drop phase done
 
 -- ======================================================================
 -- 2) CORE TABLES
@@ -94,7 +137,9 @@ CHECK (
   (ROLE = 'MANAGER'    AND BRANCH_ID IS NOT NULL)
 );
 
-CREATE UNIQUE INDEX UX_ONE_SUPERVISOR ON MANAGERS (CASE WHEN ROLE='SUPERVISOR' THEN 'ONLY_ONE' END);
+CREATE UNIQUE INDEX UX_ONE_SUPERVISOR
+ON MANAGERS (CASE WHEN ROLE='SUPERVISOR' THEN 'ONLY_ONE' END);
+
 CREATE INDEX IDX_MANAGERS_BRANCH_ID ON MANAGERS (BRANCH_ID);
 
 -- 3) CAR_CATEGORIES
@@ -112,7 +157,7 @@ CREATE TABLE IOT_DEVICES (
   DEVICE_CODE      VARCHAR2(40) NOT NULL,
   DEVICE_IMEI      VARCHAR2(20),
   FIRMWARE_VERSION VARCHAR2(40),
-  STATUS           VARCHAR2(20) DEFAULT 'INACTIVE',
+  STATUS           VARCHAR2(20) DEFAULT 'INACTIVE' NOT NULL,
   BRANCH_ID        NUMBER,
   ACTIVATED_AT     TIMESTAMP,
   LAST_SEEN_AT     TIMESTAMP,
@@ -144,7 +189,7 @@ CREATE TABLE CARS (
   COLOR          VARCHAR2(40),
   IMAGE_URL      VARCHAR2(500),
   ODOMETER_KM    NUMBER(10,0) DEFAULT 0,
-  STATUS         VARCHAR2(20) DEFAULT 'AVAILABLE',
+  STATUS         VARCHAR2(20) DEFAULT 'AVAILABLE' NOT NULL,
   BRANCH_ID      NUMBER,
   CREATED_AT     TIMESTAMP DEFAULT SYSTIMESTAMP
 );
@@ -172,7 +217,7 @@ CREATE INDEX IDX_CARS_CATEGORY ON CARS (CATEGORY_ID);
 CREATE INDEX IDX_CARS_STATUS   ON CARS (STATUS);
 CREATE INDEX IDX_CARS_BRANCH   ON CARS (BRANCH_ID);
 
--- 6) CUSTOMERS (branch-scoped, created by manager)
+-- 6) CUSTOMERS
 CREATE TABLE CUSTOMERS (
   CUSTOMER_ID NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   BRANCH_ID   NUMBER NOT NULL,
@@ -200,7 +245,38 @@ ALTER TABLE CUSTOMERS ADD CONSTRAINT UK_CUST_EMAIL    UNIQUE (EMAIL);
 CREATE INDEX IDX_CUST_BRANCH ON CUSTOMERS(BRANCH_ID);
 CREATE INDEX IDX_CUST_NAME   ON CUSTOMERS(LAST_NAME, FIRST_NAME);
 
--- 7) RENTALS
+-- 7) RESERVATIONS
+CREATE TABLE RESERVATIONS (
+  RESERVATION_ID NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  CAR_ID         NUMBER NOT NULL,
+  CUSTOMER_ID    NUMBER NOT NULL,
+  BRANCH_ID      NUMBER NOT NULL,
+  MANAGER_ID     NUMBER NOT NULL,
+  START_AT       TIMESTAMP NOT NULL,
+  END_AT         TIMESTAMP NOT NULL,
+  STATUS         VARCHAR2(20) DEFAULT 'ACTIVE' NOT NULL,
+  CREATED_AT     TIMESTAMP DEFAULT SYSTIMESTAMP
+);
+
+ALTER TABLE RESERVATIONS ADD CONSTRAINT CK_RES_STATUS
+  CHECK (STATUS IN ('ACTIVE','CANCELLED','CONVERTED'));
+
+ALTER TABLE RESERVATIONS ADD CONSTRAINT FK_RES_CAR
+  FOREIGN KEY (CAR_ID) REFERENCES CARS(CAR_ID);
+
+ALTER TABLE RESERVATIONS ADD CONSTRAINT FK_RES_CUST
+  FOREIGN KEY (CUSTOMER_ID) REFERENCES CUSTOMERS(CUSTOMER_ID);
+
+ALTER TABLE RESERVATIONS ADD CONSTRAINT FK_RES_BR
+  FOREIGN KEY (BRANCH_ID) REFERENCES BRANCHES(BRANCH_ID);
+
+ALTER TABLE RESERVATIONS ADD CONSTRAINT FK_RES_MGR
+  FOREIGN KEY (MANAGER_ID) REFERENCES MANAGERS(MANAGER_ID);
+
+CREATE INDEX IX_RES_CAR_TIME ON RESERVATIONS (CAR_ID, START_AT, END_AT);
+CREATE INDEX IX_RES_STATUS   ON RESERVATIONS (STATUS);
+
+-- 8) RENTALS
 CREATE TABLE RENTALS (
   RENTAL_ID      NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   CAR_ID         NUMBER NOT NULL,
@@ -210,7 +286,7 @@ CREATE TABLE RENTALS (
   START_AT       TIMESTAMP NOT NULL,
   DUE_AT         TIMESTAMP NOT NULL,
   RETURN_AT      TIMESTAMP,
-  STATUS         VARCHAR2(20),
+  STATUS         VARCHAR2(20) DEFAULT 'ACTIVE' NOT NULL,
   START_ODOMETER NUMBER(10,0),
   END_ODOMETER   NUMBER(10,0),
   TOTAL_AMOUNT   NUMBER(12,2),
@@ -237,24 +313,7 @@ CREATE INDEX IDX_RENTALS_BRANCH ON RENTALS (BRANCH_ID);
 CREATE INDEX IDX_RENTALS_STATUS ON RENTALS (STATUS);
 CREATE INDEX IX_RENT_CAR        ON RENTALS (CAR_ID, START_AT, DUE_AT);
 
--- 8) IOT_ALERTS
-CREATE TABLE IOT_ALERTS (
-  ALERT_ID   NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  BRANCH_ID  NUMBER,
-  STATUS     VARCHAR2(20),
-  CREATED_AT TIMESTAMP DEFAULT SYSTIMESTAMP
-);
-
-ALTER TABLE IOT_ALERTS ADD CONSTRAINT FK_IOT_ALERTS_BRANCH
-  FOREIGN KEY (BRANCH_ID) REFERENCES BRANCHES (BRANCH_ID);
-
-ALTER TABLE IOT_ALERTS ADD CONSTRAINT CK_IOT_ALERTS_STATUS
-  CHECK (STATUS IN ('OPEN','RESOLVED'));
-
-CREATE INDEX IDX_IOT_ALERTS_BRANCH ON IOT_ALERTS (BRANCH_ID);
-CREATE INDEX IDX_IOT_ALERTS_STATUS ON IOT_ALERTS (STATUS);
-
--- 9) IOT_TELEMETRY
+-- 9) IOT_TELEMETRY (history)
 CREATE TABLE IOT_TELEMETRY (
   TELEMETRY_ID       NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   DEVICE_ID          NUMBER NOT NULL,
@@ -280,12 +339,15 @@ ALTER TABLE IOT_TELEMETRY ADD CONSTRAINT FK_IOT_TELE_DEVICE
 ALTER TABLE IOT_TELEMETRY ADD CONSTRAINT FK_IOT_TELE_CAR
   FOREIGN KEY (CAR_ID) REFERENCES CARS (CAR_ID) ON DELETE CASCADE;
 
+ALTER TABLE IOT_TELEMETRY ADD CONSTRAINT FK_IOT_TELE_RENTAL
+  FOREIGN KEY (RENTAL_ID) REFERENCES RENTALS(RENTAL_ID);
+
 CREATE INDEX IDX_IOT_RENTAL     ON IOT_TELEMETRY(RENTAL_ID);
 CREATE INDEX IDX_IOT_EVENT_TS   ON IOT_TELEMETRY(EVENT_TS);
 CREATE INDEX IDX_IOT_DEVICE     ON IOT_TELEMETRY(DEVICE_ID);
 CREATE INDEX IDX_IOT_EVENT_TYPE ON IOT_TELEMETRY(EVENT_TYPE);
 
--- 10) RT_IOT_FEED
+-- 10) RT_IOT_FEED (live buffer)
 CREATE TABLE RT_IOT_FEED (
   TELEMETRY_ID       NUMBER,
   DEVICE_ID          NUMBER NOT NULL,
@@ -312,32 +374,385 @@ CREATE INDEX IDX_RT_CAR_ID   ON RT_IOT_FEED(CAR_ID);
 COMMENT ON TABLE IOT_TELEMETRY IS 'Historical Data generated for analysis';
 COMMENT ON TABLE RT_IOT_FEED IS 'Real-Time Buffer for Live Monitoring Page';
 
--- ============================================================
--- Seed default SUPERVISOR (Admin)
--- ============================================================
-
-INSERT INTO MANAGERS (
-  MANAGER_CODE,
-  FIRST_NAME,
-  LAST_NAME,
-  EMAIL,
-  PHONE,
-  MANAGER_PASSWORD,
-  ROLE,
-  BRANCH_ID
-)
-SELECT
-  'SUP001',
-  'Hamza',
-  'Bjibji',
-  'hamzabjibji@gmail.com',
-  '+212636376992',
-  '$2b$12$qxuQ7i1uAH5hJkftbIhUS.8h5PnqYLPpxb8r9c9Zv6LCJLJvIhQuK',
-  'SUPERVISOR',
-  NULL
-FROM dual
-WHERE NOT EXISTS (
-  SELECT 1 FROM MANAGERS WHERE MANAGER_CODE = 'SUP001'
+-- 11) IOT_ALERTS (compatible with simulator + GOLD)
+CREATE TABLE IOT_ALERTS (
+  ALERT_ID     NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  CAR_ID       NUMBER NOT NULL,
+  BRANCH_ID    NUMBER,
+  DEVICE_ID    NUMBER,
+  RENTAL_ID    NUMBER,
+  ALERT_TYPE   VARCHAR2(50) NOT NULL,
+  SEVERITY     VARCHAR2(10) NOT NULL,
+  TITLE        VARCHAR2(200),
+  DESCRIPTION  VARCHAR2(500),
+  STATUS       VARCHAR2(20) DEFAULT 'OPEN' NOT NULL,
+  EVENT_TS     TIMESTAMP,
+  CREATED_AT   TIMESTAMP DEFAULT SYSTIMESTAMP,
+  RESOLVED_AT  TIMESTAMP
 );
 
+ALTER TABLE IOT_ALERTS ADD CONSTRAINT CK_IOT_ALERTS_STATUS
+  CHECK (STATUS IN ('OPEN','RESOLVED'));
+
+ALTER TABLE IOT_ALERTS ADD CONSTRAINT CK_IOT_ALERTS_SEV
+  CHECK (SEVERITY IN ('LOW','MEDIUM','HIGH','CRITICAL'));
+
+ALTER TABLE IOT_ALERTS ADD CONSTRAINT FK_ALERT_CAR
+  FOREIGN KEY (CAR_ID) REFERENCES CARS(CAR_ID);
+
+ALTER TABLE IOT_ALERTS ADD CONSTRAINT FK_ALERT_BRANCH
+  FOREIGN KEY (BRANCH_ID) REFERENCES BRANCHES(BRANCH_ID);
+
+ALTER TABLE IOT_ALERTS ADD CONSTRAINT FK_ALERT_DEVICE
+  FOREIGN KEY (DEVICE_ID) REFERENCES IOT_DEVICES(DEVICE_ID);
+
+ALTER TABLE IOT_ALERTS ADD CONSTRAINT FK_ALERT_RENTAL
+  FOREIGN KEY (RENTAL_ID) REFERENCES RENTALS(RENTAL_ID);
+
+CREATE INDEX IDX_ALERTS_CAR_TS  ON IOT_ALERTS(CAR_ID, EVENT_TS);
+CREATE INDEX IDX_ALERTS_STATUS  ON IOT_ALERTS(STATUS);
+CREATE INDEX IDX_ALERTS_TYPE_TS ON IOT_ALERTS(ALERT_TYPE, CREATED_AT);
+
+-- 12) Ops tables (optional)
+CREATE TABLE RT_EVENTS (
+  EVENT_ID     NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  EVENT_TYPE   VARCHAR2(50) NOT NULL,
+  ENTITY_NAME  VARCHAR2(50),
+  ENTITY_ID    NUMBER,
+  PAYLOAD      CLOB,
+  CREATED_AT   TIMESTAMP DEFAULT SYSTIMESTAMP
+);
+
+CREATE TABLE FAILED_OPS (
+  FAIL_ID      NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  OP_NAME      VARCHAR2(80) NOT NULL,
+  ERROR_CODE   NUMBER,
+  ERROR_MSG    VARCHAR2(4000),
+  PAYLOAD      CLOB,
+  CREATED_AT   TIMESTAMP DEFAULT SYSTIMESTAMP
+);
+CREATE INDEX IDX_FAILED_OPS_DATE ON FAILED_OPS(CREATED_AT);
+
+PROMPT [SILVER] Tables created
+
+-- ======================================================================
+-- 3) FUNCTIONS + PACKAGE (API helpers)
+-- ======================================================================
+
+CREATE OR REPLACE FUNCTION FN_PERIODS_OVERLAP(
+  p_start1 TIMESTAMP, p_end1 TIMESTAMP,
+  p_start2 TIMESTAMP, p_end2 TIMESTAMP
+) RETURN NUMBER IS
+BEGIN
+  IF p_start1 < p_end2 AND p_start2 < p_end1 THEN RETURN 1; END IF;
+  RETURN 0;
+END;
+/
+SHOW ERRORS
+
+CREATE OR REPLACE FUNCTION FN_CAR_AVAILABLE_EXCL_RES(
+  p_car_id  NUMBER,
+  p_start   TIMESTAMP,
+  p_end     TIMESTAMP
+) RETURN NUMBER IS
+  v_cnt NUMBER;
+BEGIN
+  SELECT COUNT(*)
+  INTO v_cnt
+  FROM (
+    SELECT START_AT s, END_AT e
+      FROM RESERVATIONS
+     WHERE CAR_ID = p_car_id
+       AND STATUS = 'ACTIVE'
+    UNION ALL
+    SELECT START_AT s, NVL(RETURN_AT, DUE_AT) e
+      FROM RENTALS
+     WHERE CAR_ID = p_car_id
+       AND STATUS IN ('ACTIVE','IN_PROGRESS')
+  )
+  WHERE FN_PERIODS_OVERLAP(s, e, p_start, p_end) = 1;
+
+  RETURN CASE WHEN v_cnt = 0 THEN 1 ELSE 0 END;
+END;
+/
+SHOW ERRORS
+
+CREATE OR REPLACE PACKAGE PKG_RENTAL AS
+  PROCEDURE CREATE_RESERVATION(
+    p_car_id NUMBER, p_customer_id NUMBER, p_branch_id NUMBER, p_manager_id NUMBER,
+    p_start_at TIMESTAMP, p_end_at TIMESTAMP
+  );
+  PROCEDURE START_RENTAL(
+    p_car_id NUMBER, p_customer_id NUMBER, p_branch_id NUMBER, p_manager_id NUMBER,
+    p_start_at TIMESTAMP, p_due_at TIMESTAMP, p_start_odometer NUMBER,
+    p_reservation_id NUMBER DEFAULT NULL
+  );
+  PROCEDURE CLOSE_RENTAL(
+    p_rental_id NUMBER, p_return_at TIMESTAMP, p_end_odometer NUMBER, p_total_amount NUMBER
+  );
+END PKG_RENTAL;
+/
+SHOW ERRORS
+
+CREATE OR REPLACE PACKAGE BODY PKG_RENTAL AS
+
+  PROCEDURE CREATE_RESERVATION(
+    p_car_id NUMBER, p_customer_id NUMBER, p_branch_id NUMBER, p_manager_id NUMBER,
+    p_start_at TIMESTAMP, p_end_at TIMESTAMP
+  ) IS
+  BEGIN
+    IF p_start_at >= p_end_at THEN
+      RAISE_APPLICATION_ERROR(-20001, 'START_AT must be < END_AT');
+    END IF;
+
+    IF FN_CAR_AVAILABLE_EXCL_RES(p_car_id, p_start_at, p_end_at) = 0 THEN
+      RAISE_APPLICATION_ERROR(-20002, 'CAR NOT AVAILABLE');
+    END IF;
+
+    INSERT INTO RESERVATIONS (CAR_ID, CUSTOMER_ID, BRANCH_ID, MANAGER_ID, START_AT, END_AT, STATUS)
+    VALUES (p_car_id, p_customer_id, p_branch_id, p_manager_id, p_start_at, p_end_at, 'ACTIVE');
+
+    COMMIT;
+  END;
+
+  PROCEDURE START_RENTAL(
+    p_car_id NUMBER, p_customer_id NUMBER, p_branch_id NUMBER, p_manager_id NUMBER,
+    p_start_at TIMESTAMP, p_due_at TIMESTAMP, p_start_odometer NUMBER,
+    p_reservation_id NUMBER DEFAULT NULL
+  ) IS
+    v_res_car NUMBER;
+  BEGIN
+    IF p_start_at >= p_due_at THEN
+      RAISE_APPLICATION_ERROR(-20011, 'START_AT must be < DUE_AT');
+    END IF;
+
+    IF p_reservation_id IS NOT NULL THEN
+      SELECT CAR_ID INTO v_res_car
+        FROM RESERVATIONS
+       WHERE RESERVATION_ID = p_reservation_id
+         AND STATUS = 'ACTIVE'
+       FOR UPDATE;
+
+      IF v_res_car <> p_car_id THEN
+        RAISE_APPLICATION_ERROR(-20012, 'Reservation does not match CAR');
+      END IF;
+
+      UPDATE RESERVATIONS
+         SET STATUS='CONVERTED'
+       WHERE RESERVATION_ID = p_reservation_id;
+    ELSE
+      IF FN_CAR_AVAILABLE_EXCL_RES(p_car_id, p_start_at, p_due_at) = 0 THEN
+        RAISE_APPLICATION_ERROR(-20013, 'CAR NOT AVAILABLE');
+      END IF;
+    END IF;
+
+    INSERT INTO RENTALS (
+      CAR_ID, CUSTOMER_ID, BRANCH_ID, MANAGER_ID,
+      START_AT, DUE_AT, STATUS, START_ODOMETER
+    ) VALUES (
+      p_car_id, p_customer_id, p_branch_id, p_manager_id,
+      p_start_at, p_due_at, 'ACTIVE', p_start_odometer
+    );
+
+    COMMIT;
+  END;
+
+  PROCEDURE CLOSE_RENTAL(
+    p_rental_id NUMBER, p_return_at TIMESTAMP, p_end_odometer NUMBER, p_total_amount NUMBER
+  ) IS
+  BEGIN
+    UPDATE RENTALS
+       SET RETURN_AT = p_return_at,
+           END_ODOMETER = p_end_odometer,
+           TOTAL_AMOUNT = p_total_amount,
+           STATUS = 'CLOSED'
+     WHERE RENTAL_ID = p_rental_id
+       AND STATUS IN ('ACTIVE','IN_PROGRESS');
+
+    COMMIT;
+  END;
+
+END PKG_RENTAL;
+/
+SHOW ERRORS
+
+PROMPT [SILVER] Functions + package created
+
+
+
+
+-- ======================================================================
+-- 4) TRIGGERS (car status sync)  ✅ FIXED (no ORA-04091, compiles)
+-- ======================================================================
+
+-- ----------------------------------------------------------------------
+-- TRG_RES_AIUD_STATUS (RESERVATIONS -> updates CARS)
+-- ----------------------------------------------------------------------
+CREATE OR REPLACE TRIGGER TRG_RES_AIUD_STATUS
+FOR INSERT OR UPDATE OR DELETE ON RESERVATIONS
+COMPOUND TRIGGER
+
+  TYPE t_num_tab IS TABLE OF NUMBER INDEX BY PLS_INTEGER;
+  g_car_ids t_num_tab;
+  g_n PLS_INTEGER := 0;
+
+  PROCEDURE add_car(p_car_id NUMBER) IS
+  BEGIN
+    IF p_car_id IS NOT NULL THEN
+      g_n := g_n + 1;
+      g_car_ids(g_n) := p_car_id;
+    END IF;
+  END;
+
+AFTER EACH ROW IS
+BEGIN
+  add_car(NVL(:NEW.CAR_ID, :OLD.CAR_ID));
+END AFTER EACH ROW;
+
+AFTER STATEMENT IS
+  v_has_rental     NUMBER;
+  v_has_active_res NUMBER;
+BEGIN
+  IF g_n > 0 THEN
+    FOR i IN 1 .. g_n LOOP
+
+      SELECT COUNT(*)
+        INTO v_has_rental
+        FROM RENTALS
+       WHERE CAR_ID = g_car_ids(i)
+         AND STATUS IN ('ACTIVE','IN_PROGRESS');
+
+      IF v_has_rental > 0 THEN
+        UPDATE CARS
+           SET STATUS = 'RENTED'
+         WHERE CAR_ID = g_car_ids(i)
+           AND STATUS NOT IN ('MAINTENANCE','RETIRED');
+      ELSE
+        SELECT COUNT(*)
+          INTO v_has_active_res
+          FROM RESERVATIONS
+         WHERE CAR_ID = g_car_ids(i)
+           AND STATUS = 'ACTIVE';
+
+        UPDATE CARS
+           SET STATUS = CASE WHEN v_has_active_res > 0 THEN 'RESERVED' ELSE 'AVAILABLE' END
+         WHERE CAR_ID = g_car_ids(i)
+           AND STATUS NOT IN ('MAINTENANCE','RETIRED');
+      END IF;
+
+    END LOOP;
+  END IF;
+END AFTER STATEMENT;
+
+END TRG_RES_AIUD_STATUS;
+/
+SHOW ERRORS
+
+
+-- ----------------------------------------------------------------------
+-- TRG_RENT_AIUD_STATUS (RENTALS -> updates CARS)
+-- ----------------------------------------------------------------------
+CREATE OR REPLACE TRIGGER TRG_RENT_AIUD_STATUS
+FOR INSERT OR UPDATE OR DELETE ON RENTALS
+COMPOUND TRIGGER
+
+  TYPE t_num_tab IS TABLE OF NUMBER INDEX BY PLS_INTEGER;
+  g_car_ids t_num_tab;
+  g_n PLS_INTEGER := 0;
+
+  PROCEDURE add_car(p_car_id NUMBER) IS
+  BEGIN
+    IF p_car_id IS NOT NULL THEN
+      g_n := g_n + 1;
+      g_car_ids(g_n) := p_car_id;
+    END IF;
+  END;
+
+AFTER EACH ROW IS
+BEGIN
+  add_car(NVL(:NEW.CAR_ID, :OLD.CAR_ID));
+END AFTER EACH ROW;
+
+AFTER STATEMENT IS
+  v_has_rental     NUMBER;
+  v_has_active_res NUMBER;
+BEGIN
+  IF g_n > 0 THEN
+    FOR i IN 1 .. g_n LOOP
+
+      SELECT COUNT(*)
+        INTO v_has_rental
+        FROM RENTALS
+       WHERE CAR_ID = g_car_ids(i)
+         AND STATUS IN ('ACTIVE','IN_PROGRESS');
+
+      IF v_has_rental > 0 THEN
+        UPDATE CARS
+           SET STATUS = 'RENTED'
+         WHERE CAR_ID = g_car_ids(i)
+           AND STATUS NOT IN ('MAINTENANCE','RETIRED');
+      ELSE
+        SELECT COUNT(*)
+          INTO v_has_active_res
+          FROM RESERVATIONS
+         WHERE CAR_ID = g_car_ids(i)
+           AND STATUS = 'ACTIVE';
+
+        UPDATE CARS
+           SET STATUS = CASE WHEN v_has_active_res > 0 THEN 'RESERVED' ELSE 'AVAILABLE' END
+         WHERE CAR_ID = g_car_ids(i)
+           AND STATUS NOT IN ('MAINTENANCE','RETIRED');
+      END IF;
+
+    END LOOP;
+  END IF;
+END AFTER STATEMENT;
+
+END TRG_RENT_AIUD_STATUS;
+/
+SHOW ERRORS
+
+PROMPT [SILVER] Triggers created (compound triggers, mutating-safe)
+
+
+-- ======================================================================
+-- 5) OPTIONAL VIEWS (ops)
+-- ======================================================================
+
+CREATE OR REPLACE VIEW VW_CAR_INVENTORY AS
+SELECT
+  c.CAR_ID, c.LICENSE_PLATE, c.MAKE, c.MODEL, c.MODEL_YEAR, c.COLOR,
+  c.STATUS, c.ODOMETER_KM,
+  b.BRANCH_NAME, b.CITY AS BRANCH_CITY,
+  cat.CATEGORY_NAME,
+  d.DEVICE_CODE, d.STATUS AS DEVICE_STATUS, d.LAST_SEEN_AT
+FROM CARS c
+LEFT JOIN BRANCHES b ON b.BRANCH_ID = c.BRANCH_ID
+LEFT JOIN CAR_CATEGORIES cat ON cat.CATEGORY_ID = c.CATEGORY_ID
+LEFT JOIN IOT_DEVICES d ON d.DEVICE_ID = c.DEVICE_ID;
+
+CREATE OR REPLACE VIEW VW_FAILED_OPS_DAILY AS
+SELECT TRUNC(CREATED_AT) AS DAY, OP_NAME, COUNT(*) AS FAIL_CNT
+FROM FAILED_OPS
+GROUP BY TRUNC(CREATED_AT), OP_NAME;
+
+PROMPT [SILVER] Views created
+
+-- ======================================================================
+-- 6) Seed default SUPERVISOR (Admin)
+-- ======================================================================
+
+INSERT INTO MANAGERS (
+  MANAGER_CODE, FIRST_NAME, LAST_NAME, EMAIL, PHONE,
+  MANAGER_PASSWORD, ROLE, BRANCH_ID
+)
+SELECT
+  'SUP001','Hamza','Bjibji','hamzabjibji@gmail.com','+212636376992',
+  '$2b$12$qxuQ7i1uAH5hJkftbIhUS.8h5PnqYLPpxb8r9c9Zv6LCJLJvIhQuK',
+  'SUPERVISOR', NULL
+FROM dual
+WHERE NOT EXISTS (SELECT 1 FROM MANAGERS WHERE MANAGER_CODE='SUP001');
+
 COMMIT;
+
+PROMPT [OK] SILVER deployed
