@@ -1,7 +1,7 @@
 // ✅ FIX: src/frontend/src/pages/Login.tsx (works with new AuthContext.login(email,password))
 import React, { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Shield, Loader2, Eye, EyeOff, Lock, Mail } from "lucide-react";
+import { Car, Loader2, Eye, EyeOff, Lock, Mail } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 
 export function LoginPage() {
@@ -44,7 +44,7 @@ export function LoginPage() {
         <div className="rounded-[32px] border border-white/10 bg-[#121212]/80 backdrop-blur-xl shadow-2xl p-8 sm:p-10 animate-in zoom-in-95 fade-in duration-500">
           <div className="mb-8 text-center">
             <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/20">
-              <Shield className="h-7 w-7 text-white" fill="currentColor" fillOpacity={0.2} />
+<Car className="h-7 w-7 text-white" />
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-white">Welcome back</h1>
             <p className="mt-2 text-sm text-neutral-400">

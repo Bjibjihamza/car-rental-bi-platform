@@ -3,19 +3,7 @@ import { useAuth } from "../auth/AuthContext";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { Badge } from "../components/Badge";
-import {
-  Activity,
-  Zap,
-  Thermometer,
-  MapPin,
-  Navigation,
-  Flame,
-  Fuel,
-  X,
-} from "lucide-react";
-
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from "react-leaflet";
-import L from "leaflet";
+import { Activity, Zap, Thermometer, Navigation, Flame, Fuel, X, MapPin } from "lucide-react";
 
 const API_URL =
   (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/$/, "") ||
@@ -59,19 +47,6 @@ const defaultFilters: Filters = {
   onlyOverheat: false,
   onlySpeeding: false,
 };
-
-// fix default marker icon (leaflet + bundlers)
-const DefaultIcon = L.icon({
-  iconUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  iconRetinaUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  shadowUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-});
-L.Marker.prototype.options.icon = DefaultIcon;
 
 function safeNum(v: any) {
   const n = Number(v);
@@ -149,10 +124,25 @@ function statusPill(s: LiveSignal) {
   const spd = s.SPEED_KMH >= SPEEDING_KMH;
   const low = s.FUEL_LEVEL_PCT <= FUEL_LOW_PCT;
 
-  if (over) return { label: "OVERHEAT", cls: "bg-rose-500/15 text-rose-300 border-rose-500/20" };
-  if (spd) return { label: "SPEEDING", cls: "bg-amber-500/15 text-amber-300 border-amber-500/20" };
-  if (low) return { label: "FUEL LOW", cls: "bg-orange-500/15 text-orange-300 border-orange-500/20" };
-  return { label: "OK", cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/20" };
+  if (over)
+    return {
+      label: "OVERHEAT",
+      cls: "bg-rose-500/15 text-rose-300 border-rose-500/20",
+    };
+  if (spd)
+    return {
+      label: "SPEEDING",
+      cls: "bg-amber-500/15 text-amber-300 border-amber-500/20",
+    };
+  if (low)
+    return {
+      label: "FUEL LOW",
+      cls: "bg-orange-500/15 text-orange-300 border-orange-500/20",
+    };
+  return {
+    label: "OK",
+    cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/20",
+  };
 }
 
 function kpiBox({
@@ -219,9 +209,7 @@ export function LiveMonitor() {
         if (!res.ok) return;
 
         const arr = Array.isArray(json) ? json : [];
-        const normalized = arr
-          .map(normalizeSignal)
-          .filter(Boolean) as LiveSignal[];
+        const normalized = arr.map(normalizeSignal).filter(Boolean) as LiveSignal[];
 
         if (alive) {
           setRawSignals(normalized);
@@ -240,12 +228,15 @@ export function LiveMonitor() {
     };
   }, [token]);
 
-  // latest point per car (for map + cards)
+  // latest point per car (for KPI + table)
   const latestByCar = useMemo(() => {
     const m = new Map<number, LiveSignal>();
     for (const s of rawSignals) {
       const prev = m.get(s.CAR_ID);
-      if (!prev || new Date(s.RECEIVED_AT).getTime() > new Date(prev.RECEIVED_AT).getTime()) {
+      if (
+        !prev ||
+        new Date(s.RECEIVED_AT).getTime() > new Date(prev.RECEIVED_AT).getTime()
+      ) {
         m.set(s.CAR_ID, s);
       }
     }
@@ -258,11 +249,16 @@ export function LiveMonitor() {
 
     const avgSpeed =
       activeCars > 0
-        ? (latestByCar.reduce((acc, s) => acc + (s.SPEED_KMH || 0), 0) / activeCars).toFixed(1)
+        ? (
+            latestByCar.reduce((acc, s) => acc + (s.SPEED_KMH || 0), 0) /
+            activeCars
+          ).toFixed(1)
         : "0.0";
 
     const maxSpeed =
-      activeCars > 0 ? Math.max(...latestByCar.map((s) => s.SPEED_KMH || 0)).toFixed(0) : "0";
+      activeCars > 0
+        ? Math.max(...latestByCar.map((s) => s.SPEED_KMH || 0)).toFixed(0)
+        : "0";
 
     const fuelLow = latestByCar.filter((s) => s.FUEL_LEVEL_PCT <= FUEL_LOW_PCT).length;
     const overheat = latestByCar.filter((s) => s.ENGINE_TEMP_C >= OVERHEAT_C).length;
@@ -271,12 +267,13 @@ export function LiveMonitor() {
     return { activeCars, avgSpeed, maxSpeed, fuelLow, overheat, speeding };
   }, [latestByCar]);
 
-  // filtered table rows (use latestByCar for “action” table)
+  // filtered table rows
   const filtered = useMemo(() => {
     const q = filters.q.trim().toLowerCase();
     return latestByCar
       .filter((s) => {
-        if (filters.event !== "ALL" && String(s.EVENT_TYPE).toUpperCase() !== filters.event) return false;
+        if (filters.event !== "ALL" && String(s.EVENT_TYPE).toUpperCase() !== filters.event)
+          return false;
 
         if (filters.onlyFuelLow && !(s.FUEL_LEVEL_PCT <= FUEL_LOW_PCT)) return false;
         if (filters.onlyOverheat && !(s.ENGINE_TEMP_C >= OVERHEAT_C)) return false;
@@ -291,25 +288,6 @@ export function LiveMonitor() {
       })
       .sort((a, b) => riskScore(b) - riskScore(a));
   }, [latestByCar, filters]);
-
-  // map center
-  const mapCenter = useMemo<[number, number]>(() => {
-    const first = latestByCar.find((s) => s.LATITUDE && s.LONGITUDE);
-    return first ? [first.LATITUDE, first.LONGITUDE] : [33.5731, -7.5898]; // Casablanca fallback
-  }, [latestByCar]);
-
-  // optional “trace” polyline for selected vehicle (from rawSignals last points)
-  const selectedTrace = useMemo(() => {
-    if (!selected) return [];
-    const pts = rawSignals
-      .filter((s) => s.CAR_ID === selected.CAR_ID)
-      .slice(0, 30) // because rawSignals is ordered DESC from backend
-      .reverse()
-      .filter((s) => s.LATITUDE && s.LONGITUDE)
-      .map((s) => [s.LATITUDE, s.LONGITUDE] as [number, number]);
-
-    return pts;
-  }, [selected, rawSignals]);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -329,229 +307,186 @@ export function LiveMonitor() {
         {kpiBox({ icon: Flame, label: "Overheats", value: kpis.overheat, tone: "rose" })}
       </div>
 
-      {/* Main grid: MAP + TABLE */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        {/* MAP */}
-        <Card
-          title="Live Map"
-          subtitle="Click a vehicle marker to open details"
-          className="xl:col-span-2 min-h-[520px]"
-        >
-          <div className="h-[520px] overflow-hidden rounded-2xl border border-white/10">
-            <MapContainer center={mapCenter} zoom={12} style={{ height: "520px", width: "100%" }}>
-              <TileLayer
-                attribution='&copy; OpenStreetMap'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              />
+      {/* MAIN: FULL-WIDTH TABLE */}
+      <Card
+        title="Live Fleet Monitor"
+        subtitle="Sorted by risk score — click a row to inspect"
+        className="min-h-[640px]"
+      >
+        {/* Filters */}
+        <div className="mb-4 grid grid-cols-1 gap-3">
+          <input
+            value={filters.q}
+            onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value }))}
+            placeholder="Search plate / make / model..."
+            className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder-neutral-500 outline-none focus:border-indigo-500/40"
+          />
 
-              {latestByCar
-                .filter((s) => s.LATITUDE && s.LONGITUDE)
-                .map((s) => {
-                  const pill = statusPill(s);
+          <div className="flex flex-wrap gap-2">
+            {(["ALL", "DRIVING", "IDLE", "STOPPED"] as const).map((ev) => (
+              <button
+                key={ev}
+                onClick={() => setFilters((f) => ({ ...f, event: ev }))}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
+                  filters.event === ev
+                    ? "bg-indigo-600 text-white border-indigo-500/40"
+                    : "bg-white/5 text-neutral-300 border-white/10 hover:bg-white/10"
+                }`}
+              >
+                {ev}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <ToggleChip
+              label="Only Risk"
+              active={filters.onlyRisk}
+              onClick={() => setFilters((f) => ({ ...f, onlyRisk: !f.onlyRisk }))}
+            />
+            <ToggleChip
+              label="Fuel Low"
+              active={filters.onlyFuelLow}
+              onClick={() => setFilters((f) => ({ ...f, onlyFuelLow: !f.onlyFuelLow }))}
+            />
+            <ToggleChip
+              label="Overheat"
+              active={filters.onlyOverheat}
+              onClick={() => setFilters((f) => ({ ...f, onlyOverheat: !f.onlyOverheat }))}
+            />
+            <ToggleChip
+              label="Speeding"
+              active={filters.onlySpeeding}
+              onClick={() => setFilters((f) => ({ ...f, onlySpeeding: !f.onlySpeeding }))}
+            />
+          </div>
+        </div>
+
+        {/* Table */}
+        <div className="overflow-hidden">
+          <DataTable
+            rows={filtered}
+            cols={[
+              {
+                key: "STATUS",
+                header: "Status",
+                render: (r: LiveSignal) => {
+                  const pill = statusPill(r);
                   return (
-                    <Marker
-                      key={s.CAR_ID}
-                      position={[s.LATITUDE, s.LONGITUDE]}
-                      eventHandlers={{
-                        click: () => setSelected(s),
-                      }}
-                    >
-                      <Popup>
-                        <div className="space-y-2">
-                          <div className="font-bold">{s.LICENSE_PLATE}</div>
-                          <div className="text-xs">{s.MAKE} {s.MODEL}</div>
-                          <div className="text-xs">Speed: {s.SPEED_KMH.toFixed(0)} km/h</div>
-                          <div className="text-xs">Fuel: {s.FUEL_LEVEL_PCT.toFixed(0)}%</div>
-                          <div className="text-xs">Temp: {s.ENGINE_TEMP_C.toFixed(0)}°C</div>
-                          <div className="text-xs">Event: {String(s.EVENT_TYPE || "").toUpperCase()}</div>
-                          <div className="text-xs">Risk: {riskScore(s)}</div>
-                          <div className="text-xs">{new Date(s.RECEIVED_AT).toLocaleTimeString()}</div>
-                          <div className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${pill.cls}`}>
-                            {pill.label}
-                          </div>
-                        </div>
-                      </Popup>
-                    </Marker>
-                  );
-                })}
-
-              {selectedTrace.length >= 2 && (
-                <Polyline positions={selectedTrace} pathOptions={{ weight: 4 }} />
-              )}
-            </MapContainer>
-          </div>
-        </Card>
-
-        {/* FILTERS + TABLE */}
-        <Card
-          title="Live Fleet Table"
-          subtitle="Sorted by risk score — click a row to inspect"
-          className="min-h-[520px]"
-        >
-          {/* Filters */}
-          <div className="mb-4 grid grid-cols-1 gap-3">
-            <input
-              value={filters.q}
-              onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value }))}
-              placeholder="Search plate / make / model..."
-              className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder-neutral-500 outline-none focus:border-indigo-500/40"
-            />
-
-            <div className="flex flex-wrap gap-2">
-              {(["ALL", "DRIVING", "IDLE", "STOPPED"] as const).map((ev) => (
-                <button
-                  key={ev}
-                  onClick={() => setFilters((f) => ({ ...f, event: ev }))}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
-                    filters.event === ev
-                      ? "bg-indigo-600 text-white border-indigo-500/40"
-                      : "bg-white/5 text-neutral-300 border-white/10 hover:bg-white/10"
-                  }`}
-                >
-                  {ev}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <ToggleChip
-                label="Only Risk"
-                active={filters.onlyRisk}
-                onClick={() => setFilters((f) => ({ ...f, onlyRisk: !f.onlyRisk }))}
-              />
-              <ToggleChip
-                label="Fuel Low"
-                active={filters.onlyFuelLow}
-                onClick={() => setFilters((f) => ({ ...f, onlyFuelLow: !f.onlyFuelLow }))}
-              />
-              <ToggleChip
-                label="Overheat"
-                active={filters.onlyOverheat}
-                onClick={() => setFilters((f) => ({ ...f, onlyOverheat: !f.onlyOverheat }))}
-              />
-              <ToggleChip
-                label="Speeding"
-                active={filters.onlySpeeding}
-                onClick={() => setFilters((f) => ({ ...f, onlySpeeding: !f.onlySpeeding }))}
-              />
-            </div>
-          </div>
-
-          {/* Table */}
-          <div className="overflow-hidden">
-            <DataTable
-              rows={filtered}
-              cols={[
-                {
-                  key: "RISK",
-                  header: "Risk",
-                  render: (r: LiveSignal) => (
-                    <span className="font-mono text-xs font-bold text-white">{riskScore(r)}</span>
-                  ),
-                },
-                {
-                  key: "CAR",
-                  header: "Vehicle",
-                  render: (r: LiveSignal) => (
-                    <button
-                      onClick={() => setSelected(r)}
-                      className="text-left group"
-                    >
-                      <div className="font-bold text-white text-sm group-hover:text-indigo-300">
-                        {r.LICENSE_PLATE}
-                      </div>
-                      <div className="text-xs text-neutral-500">{r.MAKE} {r.MODEL}</div>
-                    </button>
-                  ),
-                },
-                {
-                  key: "EVENT",
-                  header: "Event",
-                  render: (r: LiveSignal) => (
-                    <Badge tone={eventTone(r.EVENT_TYPE)}>
-                      {String(r.EVENT_TYPE || "").toUpperCase()}
-                    </Badge>
-                  ),
-                },
-                {
-                  key: "SPEED",
-                  header: "Speed",
-                  render: (r: LiveSignal) => (
                     <span
-                      className={`font-mono font-bold ${
-                        r.SPEED_KMH >= SPEEDING_KMH ? "text-amber-300" : "text-white"
-                      }`}
+                      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${pill.cls}`}
                     >
-                      {r.SPEED_KMH.toFixed(0)} km/h
+                      {pill.label}
                     </span>
-                  ),
+                  );
                 },
-                {
-                  key: "FUEL",
-                  header: "Fuel",
-                  render: (r: LiveSignal) => (
-                    <div className="flex items-center gap-2">
-                      <div className="h-1.5 w-16 bg-neutral-700 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full ${r.FUEL_LEVEL_PCT <= FUEL_LOW_PCT ? "bg-orange-500" : "bg-emerald-500"}`}
-                          style={{ width: `${Math.max(0, Math.min(100, r.FUEL_LEVEL_PCT))}%` }}
-                        />
-                      </div>
-                      <span className="text-xs text-neutral-400">{r.FUEL_LEVEL_PCT.toFixed(0)}%</span>
+              },
+              {
+                key: "RISK",
+                header: "Risk",
+                render: (r: LiveSignal) => (
+                  <span className="font-mono text-xs font-bold text-white">{riskScore(r)}</span>
+                ),
+              },
+              {
+                key: "CAR",
+                header: "Vehicle",
+                render: (r: LiveSignal) => (
+                  <button onClick={() => setSelected(r)} className="text-left group">
+                    <div className="font-bold text-white text-sm group-hover:text-indigo-300">
+                      {r.LICENSE_PLATE}
                     </div>
-                  ),
-                },
-                {
-                  key: "TEMP",
-                  header: "Temp",
-                  render: (r: LiveSignal) => (
-                    <span className={`inline-flex items-center gap-1 text-xs ${
+                    <div className="text-xs text-neutral-500">
+                      {r.MAKE} {r.MODEL}
+                    </div>
+                  </button>
+                ),
+              },
+              {
+                key: "EVENT",
+                header: "Event",
+                render: (r: LiveSignal) => (
+                  <Badge tone={eventTone(r.EVENT_TYPE)}>
+                    {String(r.EVENT_TYPE || "").toUpperCase()}
+                  </Badge>
+                ),
+              },
+              {
+                key: "SPEED",
+                header: "Speed",
+                render: (r: LiveSignal) => (
+                  <span
+                    className={`font-mono font-bold ${
+                      r.SPEED_KMH >= SPEEDING_KMH ? "text-amber-300" : "text-white"
+                    }`}
+                  >
+                    {r.SPEED_KMH.toFixed(0)} km/h
+                  </span>
+                ),
+              },
+              {
+                key: "FUEL",
+                header: "Fuel",
+                render: (r: LiveSignal) => (
+                  <div className="flex items-center gap-2">
+                    <div className="h-1.5 w-24 bg-neutral-700 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full ${
+                          r.FUEL_LEVEL_PCT <= FUEL_LOW_PCT ? "bg-orange-500" : "bg-emerald-500"
+                        }`}
+                        style={{ width: `${Math.max(0, Math.min(100, r.FUEL_LEVEL_PCT))}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-neutral-400">{r.FUEL_LEVEL_PCT.toFixed(0)}%</span>
+                  </div>
+                ),
+              },
+              {
+                key: "TEMP",
+                header: "Temp",
+                render: (r: LiveSignal) => (
+                  <span
+                    className={`inline-flex items-center gap-1 text-xs ${
                       r.ENGINE_TEMP_C >= OVERHEAT_C ? "text-rose-300" : "text-neutral-300"
-                    }`}>
-                      <Thermometer size={12} /> {r.ENGINE_TEMP_C.toFixed(0)}°C
-                    </span>
+                    }`}
+                  >
+                    <Thermometer size={12} /> {r.ENGINE_TEMP_C.toFixed(0)}°C
+                  </span>
+                ),
+              },
+              {
+                key: "LOC",
+                header: "Location",
+                render: (r: LiveSignal) =>
+                  r.LATITUDE && r.LONGITUDE ? (
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${r.LATITUDE},${r.LONGITUDE}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"
+                    >
+                      <MapPin size={12} /> Maps
+                    </a>
+                  ) : (
+                    <span className="text-xs text-neutral-600">—</span>
                   ),
-                },
-                {
-                  key: "LOC",
-                  header: "Map",
-                  render: (r: LiveSignal) => (
-                    r.LATITUDE && r.LONGITUDE ? (
-                      <a
-                        href={`https://www.google.com/maps/search/?api=1&query=${r.LATITUDE},${r.LONGITUDE}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"
-                      >
-                        <MapPin size={12} /> View
-                      </a>
-                    ) : (
-                      <span className="text-xs text-neutral-600">—</span>
-                    )
-                  ),
-                },
-                {
-                  key: "TIME",
-                  header: "Time",
-                  render: (r: LiveSignal) => (
-                    <span className="text-xs font-mono text-neutral-400">
-                      {new Date(r.RECEIVED_AT).toLocaleTimeString()}
-                    </span>
-                  ),
-                },
-              ]}
-            />
-          </div>
-        </Card>
-      </div>
+              },
+              {
+                key: "TIME",
+                header: "Time",
+                render: (r: LiveSignal) => (
+                  <span className="text-xs font-mono text-neutral-400">
+                    {new Date(r.RECEIVED_AT).toLocaleTimeString()}
+                  </span>
+                ),
+              },
+            ]}
+          />
+        </div>
+      </Card>
 
       {/* Drawer */}
-      {selected && (
-        <VehicleDrawer
-          signal={selected}
-          onClose={() => setSelected(null)}
-        />
-      )}
+      {selected && <VehicleDrawer signal={selected} onClose={() => setSelected(null)} />}
     </div>
   );
 }
@@ -596,7 +531,9 @@ function VehicleDrawer({
         <div className="flex items-center justify-between">
           <div>
             <div className="text-lg font-bold text-white">{signal.LICENSE_PLATE}</div>
-            <div className="text-sm text-neutral-400">{signal.MAKE} {signal.MODEL}</div>
+            <div className="text-sm text-neutral-400">
+              {signal.MAKE} {signal.MODEL}
+            </div>
           </div>
           <button
             onClick={onClose}
